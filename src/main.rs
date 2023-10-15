@@ -443,24 +443,20 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             {
                 pipe.terminate().expect("err");
             }
-            let mut file = File::open(swapName.clone() + "/public_init.json").expect("file not found");
+            let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
             let mut buf_reader = BufReader::new(file);
             let mut contents = String::new();
             buf_reader.read_to_string(&mut contents).expect("cannot read file");
-//            contents.replace("\n}", &(",\nSwapTicketUUID: ".to_owned() + &swapName + "\n}"));
-            let mut file2 = std::fs::OpenOptions::new().write(true).open(swapName.clone() + "/public_init.json").expect("file not found");
-            let mut data: Value = serde_json::from_str(&contents).unwrap();
-            if let Value::Object(map) = &mut data {
-                map.insert("SwapTicketID".to_string(), Value::String(swapName.clone().to_string()));
-            }
-            let new_content = serde_json::to_string_pretty(&data).expect("error");
-            let mut output_file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(swapName.clone() + "/public_init.json").expect("error");
-            output_file.write_all(new_content.as_bytes()).expect("error");
-            return (status, Some(new_content))
+            let mut outputjson =
+                json!({
+                    "SwapTicketID":  swapName.clone(),
+                    "ENC_init.bin": contents
+                });
+            return (status, Some(outputjson.to_string()))
         }
+        //handle a response w public request, return the finalization IF AND ONLY IF our Servers
+        //pricing logic time lock security logic etc... agrees with the swap data
+        //this limits the amount of RESTAPI calls we will need to make as much as possible
     }
     //instead of private finalize swap endpoint first accept public postresponse endpoint that
     //checks the value of the coins in the response contract and finalizes based on a pricing
