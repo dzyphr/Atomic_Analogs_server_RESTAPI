@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
 use uuid::{uuid, Uuid};
 use std::fs::OpenOptions;
 use serde_json::{json, Value, Map};
@@ -504,6 +506,32 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let mut file = File::open(filepath).expect("cant open file");
             let mut contents = String::new();
             file.read_to_string(&mut contents).expect("cant read file");
+            let child_thread = thread::spawn(move|| {
+                let mut child_process = 
+                    Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
+                    .arg(initiatorJSONPath)
+                    .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
+                    .stderr(Stdio::null()) // Redirect stderr to /dev/null or NUL to detach from parent
+                    .spawn()
+                    .expect("Failed to start subprocess");
+
+                let mut output = String::new();
+                let mut error_output = String::new();
+                child_process.stdout.unwrap().read_to_string(&mut output).expect("Failed to read stdout");
+
+                // Capture and read stderr
+                child_process.stderr.unwrap().read_to_string(&mut error_output).expect("Failed to read stderr");
+
+                let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                if !exit_status.success() {
+                    eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                }
+                eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                eprintln!("Subprocess error output:\n{}", error_output);
+            });
             return (status, Some(contents.to_string()))
         }
     }
