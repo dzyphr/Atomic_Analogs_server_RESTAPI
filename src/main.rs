@@ -520,17 +520,40 @@ fn handle_request(request: Request) -> (bool, Option<String>)
 
                 let mut output = String::new();
                 let mut error_output = String::new();
-                child_process.stdout.unwrap().read_to_string(&mut output).expect("Failed to read stdout");
 
-                // Capture and read stderr
-                child_process.stderr.unwrap().read_to_string(&mut error_output).expect("Failed to read stderr");
+                if let Some(ref mut stdout) = child_process.stdout 
+                {
+                    stdout.read_to_string(&mut output).expect("Failed to read stdout");
+                } 
+                else 
+                {
+                    eprintln!("Failed to capture stdout.");
+                }
 
+                if let Some(ref mut stderr) = child_process.stderr 
+                {
+                    stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
+                } 
+                else 
+                {
+                    eprintln!("Failed to capture stderr.");
+                }
+/*
                 let exit_status = child_process.wait().expect("Failed to wait for subprocess");
                 if !exit_status.success() {
                     eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                 }
                 eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                 eprintln!("Subprocess error output:\n{}", error_output);
+
+                */
+                let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                if exit_status.success() {
+                    println!("Subprocess output:\n{}", output);
+                } else {
+                    eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                    eprintln!("Subprocess error output:\n{}", error_output);
+                }
             });
             return (status, Some(contents.to_string()))
         }
