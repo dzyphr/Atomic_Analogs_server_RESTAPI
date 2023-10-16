@@ -16,13 +16,13 @@ use subprocess::{PopenConfig, Popen, Redirection};
 fn json_body() -> impl Filter<Extract = (Request,), Error = warp::Rejection> + Clone {
     // When accepting a body, we want a JSON body
     // (and to reject huge payloads)...
-    warp::body::content_length_limit(1024 * 16).and(warp::body::json())
+    warp::body::content_length_limit(1024 * 1024 * 50/*mb*/).and(warp::body::json())
 }
 
 fn delete_json() -> impl Filter<Extract = (Id,), Error = warp::Rejection> + Clone {
     // When accepting a body, we want a JSON body
     // (and to reject huge payloads)...
-    warp::body::content_length_limit(1024 * 16).and(warp::body::json())
+    warp::body::content_length_limit(1024 * 1024 * 50/*mb*/).and(warp::body::json())
 }
 
 fn accepted_private_api_keys() -> Vec<&'static str>
@@ -50,7 +50,9 @@ fn private_accepted_request_types() -> Vec<&'static str>
 fn public_accepted_request_types() -> Vec<&'static str>
 {
     return vec![
-        "requestEncryptedInitiation"
+        "requestEncryptedInitiation",
+        "submitEncryptedResponse"
+
     ]
 }
 
@@ -458,6 +460,53 @@ fn handle_request(request: Request) -> (bool, Option<String>)
         //pricing logic time lock security logic etc... agrees with the swap data
         //this limits the amount of RESTAPI calls we will need to make as much as possible
     }
+    if request.request_type == "submitEncryptedResponse"
+    {
+        if request.SwapTicketID == None
+        {
+            let output = &(output.to_owned() + "SwapTicketID variable is required!");
+            return (status, Some(output.to_string()));
+        }
+        if request.encryptedResponseBIN == None
+        {
+            let output = &(output.to_owned() + "encryptedResponseBIN variable is required!");
+            return (status, Some(output.to_string()));
+        }
+        else
+        {
+            status = true;
+//            println!("request.encryptedResponseBIN: {}", request.encryptedResponseBIN.clone().unwrap());
+            let filepath =  format!("{}/ENC_response_path.bin", request.SwapTicketID.clone().unwrap());
+            let mut f = File::create(filepath.clone()).expect("cant open file");
+            f.write_all(request.encryptedResponseBIN.clone().unwrap().as_bytes()).expect("cant open file");
+            f.flush().expect("error flushing");
+            drop(f);
+            let filepath = request.SwapTicketID.clone().unwrap() + "/initiator.json";
+            let mut file = File::open(filepath).expect("cant open file");
+            let mut contents = String::new();
+            file.read_to_string(&mut contents).expect("cant read file");
+            let SwapMap: HashMap<String, Value> = serde_json::from_str(&contents).expect("Failed to parse JSON");
+            let initiatorJSONPath = rem_first_and_last(&SwapMap["initiatorJSONPath"].to_string()).to_string();
+            let mut pipe = Popen::create(&[
+                "python3",  "-u", "main.py", "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath
+            ], PopenConfig{
+                stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+            let (out, err) = pipe.communicate(None).expect("err");
+            if let Some(exit_status) = pipe.poll()
+            {
+                println!("Out: {:?}, Err: {:?}", out, err)
+            }
+            else
+            {
+                pipe.terminate().expect("err");
+            }        
+            let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
+            let mut file = File::open(filepath).expect("cant open file");
+            let mut contents = String::new();
+            file.read_to_string(&mut contents).expect("cant read file");
+            return (status, Some(contents.to_string()))
+        }
+    }
     //instead of private finalize swap endpoint first accept public postresponse endpoint that
     //checks the value of the coins in the response contract and finalizes based on a pricing
     //algorithm, private calls after generateSwapInitiator would likely only be used in recovery
@@ -475,7 +524,7 @@ fn handle_request(request: Request) -> (bool, Option<String>)
         else
         {
             let status = true;
-            //call Atomic API here
+            /call Atomic API here
             return (status, None)
         }
     }
@@ -554,7 +603,9 @@ struct Request {
     CoinB: Option<String>,
     CoinA_price: Option<String>,
     CoinB_price: Option<String>,
-    MaxVolCoinA: Option<String>
+    MaxVolCoinA: Option<String>,
+    SwapTicketID: Option<String>,
+    encryptedResponseBIN: Option<String>
     //ResponderJSONPath not ready yet
 }
 
