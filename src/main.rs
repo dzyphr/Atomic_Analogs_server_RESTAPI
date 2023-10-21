@@ -1,10 +1,16 @@
 use std::path::Path;
+use warp::Filter;
+use warp::http::Response;
+use warp::hyper::header::HeaderValue;
+use warp::hyper;
+use warp::reply;
+use warp::filters::cors::cors;
 use std::process::{Command, Stdio};
 use std::thread;
 use uuid::{uuid, Uuid};
 use std::fs::OpenOptions;
 use serde_json::{json, Value, Map};
-use warp::{http, Filter};
+use warp::{http, http::Method};
 use std::io::BufReader;
 use std::fs::File;
 use std::io::prelude::*;
@@ -68,7 +74,7 @@ fn ElGamal_keypaths() -> Vec<&'static str>
 
 fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str
 {
-    if chain == "Ergo"
+    if chain == "TestnetErgo"
     {
         let accountvec = vec![
             "basic_framework"
@@ -88,13 +94,23 @@ fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str
     }
 }
 
+
+
 #[tokio::main]
 async fn main() {
     let version =  "v0.0.1";
     let main_path  = "requests";
     let public_main_path = "publicrequests";
     let OrderTypesPath = "ordertypes";
-
+/*    let cors = cors()
+        .allow_any_origin()
+        .allow_methods(vec!["GET", "POST"])
+        .allow_headers(vec!["Content-Type"])
+        .allow_origin("http://localhost:1313");*/
+     let cors = cors()
+        .allow_any_origin()
+        .allow_methods(vec!["GET", "POST"])
+        .allow_headers(vec!["Content-Type", "Authorization"]);
     let storage = Storage::new();
     let storage_filter = warp::any().map(move || storage.clone());
     let bearer_private_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
@@ -152,14 +168,18 @@ async fn main() {
         .and(warp::path(version))
         .and(warp::path(OrderTypesPath))
         .and(warp::path::end())
-        .and_then(get_ordertypes);
+        .and_then(get_ordertypes)
+        .with(cors.clone());
     let public_add_requests = warp::post()
         .and(warp::path(version))
         .and(warp::path(public_main_path))
         .and(warp::path::end())
         .and(json_body())
         .and(storage_filter.clone())
-        .and_then(public_update_request_map);
+        .and_then(public_update_request_map)
+        .with(cors);
+//      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
+//    let route = warp::any().map(warp::reply).with(cors);
     let routes = add_requests.or(get_requests).or(update_request).or(private_delete_request).or(public_ordertypes_get_request).or(public_add_requests);
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
@@ -228,22 +248,26 @@ async fn public_update_request_map(
     request: Request,
     storage: Storage,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        if storage.request_map.read().contains_key(&request.id) == false //prevent overwriting request ids
+        if public_accepted_request_types().contains(&request.request_type.as_str())
         {
-            if public_accepted_request_types().contains(&request.request_type.as_str())
+            let (handled, output) = handle_request(request.clone());
+            if handled == true
             {
-                let (handled, output) = handle_request(request.clone());
-                if handled == true
-                {
-                    storage.request_map.write().insert(request.id, request.request_type);
-                    Ok(warp::reply::with_status(
-                        format!("{:?}",  output.unwrap()),
-                        http::StatusCode::CREATED,
-                    ))
-                }
-                else
-                {
-                    match output{
+                storage.request_map.write().insert(request.id, request.request_type);
+                
+                Ok(
+                    warp::reply::with_status(
+                            format!("{:?}",  output.unwrap()),
+                            http::StatusCode::OK,
+                    )
+                )
+                
+
+            }
+            else
+            {
+
+               match output{
                         Some(ref errorstring) =>
                             Ok(warp::reply::with_status(
                                 format!("Request Denied\n {:?}", output.unwrap()),
@@ -254,17 +278,12 @@ async fn public_update_request_map(
                                 format!("Request Denied\n"),
                                 http::StatusCode::METHOD_NOT_ALLOWED
                             ))
-                    }
-                }
-            }
-            else
-            {
-                Err(warp::reject::custom(Badrequesttype))
+                } 
             }
         }
         else
         {
-            Err(warp::reject::custom(Duplicateid))
+            Err(warp::reject::custom(Badrequesttype))
         }
 }
 
@@ -337,6 +356,11 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let output = &(output.to_owned() + "MaxVolCoinA variable is required!");
             return (status, Some(output.to_string()));
         }
+        if request.MinVolCoinA == None
+        {
+            let output = &(output.to_owned() + "MinVolCoinA variable is required!");
+            return (status, Some(output.to_string()));
+        }
         else
         {
             status = true;
@@ -345,7 +369,8 @@ fn handle_request(request: Request) -> (bool, Option<String>)
                 "CoinB": request.CoinB.unwrap(),
                 "CoinA_price": request.CoinA_price.unwrap(),
                 "CoinB_price": request.CoinB_price.unwrap(),
-                "MaxVolCoinA": request.MaxVolCoinA.unwrap()
+                "MaxVolCoinA": request.MaxVolCoinA.unwrap(),
+                "MinVolCoinA": request.MinVolCoinA.unwrap()
             });
             let NewOrderTypeObj = json!({
                 request.OrderTypeUUID.clone().unwrap(): NewOrderType
@@ -403,6 +428,7 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let swapName = Uuid::new_v4().to_string();//generate a random UUID
                                                       //future impl: swapname is sha256 of the
                                                       //public initiation (ensures uniqueness)
+//            dbg!(&swapName);
             let filepath = "OrderTypes.json";
             let mut file = File::open(filepath).expect("cant open file");
             let mut contents = String::new();
@@ -450,6 +476,10 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
             let mut buf_reader = BufReader::new(file);
             let mut contents = String::new();
+            let mut filepath = swapName.clone() + "/OrderTypeUUID";
+            let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
+            f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+            f.flush().expect("error flushing");
             buf_reader.read_to_string(&mut contents).expect("cannot read file");
             let mut outputjson =
                 json!({
@@ -489,8 +519,23 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             file.read_to_string(&mut contents).expect("cant read file");
             let SwapMap: HashMap<String, Value> = serde_json::from_str(&contents).expect("Failed to parse JSON");
             let initiatorJSONPath = rem_first_and_last(&SwapMap["initiatorJSONPath"].to_string()).to_string();
+            let mut filepath = request.SwapTicketID.clone().unwrap() + "/OrderTypeUUID";
+            let mut file = File::open(filepath).expect("cant open file");
+            let mut OrderTypeUUID = String::new();
+            file.read_to_string(&mut OrderTypeUUID).expect("cant read file");
+
+            let mut filepath = "OrderTypes.json";
+            let mut file = File::open(filepath).expect("cant open file");
+            let mut OrderTypes = String::new();
+            file.read_to_string(&mut OrderTypes).expect("cant read file");
+            let OrderTypeMap: HashMap<String, Value> = serde_json::from_str(&OrderTypes).expect("Failed to parse JSON");
+            let CoinA_Price = &OrderTypeMap[&OrderTypeUUID]["CoinA_price"];
+            let CoinB_Price = &OrderTypeMap[&OrderTypeUUID]["CoinB_price"];
+            dbg!(CoinA_Price, CoinB_Price);
             let mut pipe = Popen::create(&[
-                "python3",  "-u", "main.py", "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath
+                "python3",  "-u", "main.py", 
+                "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
+                &CoinA_Price.to_string(), &CoinB_Price.to_string()
             ], PopenConfig{
                 stdout: Redirection::Pipe, ..Default::default()}).expect("err");
             let (out, err) = pipe.communicate(None).expect("err");
@@ -514,7 +559,7 @@ fn handle_request(request: Request) -> (bool, Option<String>)
                     .arg("GeneralizedENC_InitiatorClaimSubroutine")
                     .arg(initiatorJSONPath)
                     .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                    .stderr(Stdio::null()) // Redirect stderr to /dev/null or NUL to detach from parent
+                    .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
                     .spawn()
                     .expect("Failed to start subprocess");
 
@@ -655,6 +700,7 @@ struct Request {
     CoinA_price: Option<String>,
     CoinB_price: Option<String>,
     MaxVolCoinA: Option<String>,
+    MinVolCoinA: Option<String>,
     SwapTicketID: Option<String>,
     encryptedResponseBIN: Option<String>
     //ResponderJSONPath not ready yet
