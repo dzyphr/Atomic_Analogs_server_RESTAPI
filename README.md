@@ -51,7 +51,7 @@ $ cargo build --release
 * Related Software:
   - [AtomicAPI](https://github.com/dzyphr/atomicAPI)  
   - [Atomic_Analogs_client_RESTAPI](https://github.com/dzyphr/Atomic_Analogs_client_RESTAPI) 
-  - [AtomicLocalWebUI](https://github.com/dzyphr/AtomicAnalogsLocalWebU)
+  - [AtomicLocalWebUI](https://github.com/dzyphr/AtomicAnalogsLocalWebUI)
 
 
 ## License
