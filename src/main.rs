@@ -102,6 +102,8 @@ async fn main() {
     let main_path  = "requests";
     let public_main_path = "publicrequests";
     let OrderTypesPath = "ordertypes";
+    let ElGamalPubsPath = "ElGamalPubs";
+    let ElGamalQChannelsPath = "ElGamalQChannels";
 /*    let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
@@ -177,14 +179,59 @@ async fn main() {
         .and(json_body())
         .and(storage_filter.clone())
         .and_then(public_update_request_map)
-        .with(cors);
+        .with(cors.clone());
+    let get_ElGamalPubs = warp::get()
+        .and(warp::path(version))
+        .and(warp::path(public_main_path))
+        .and(warp::path(ElGamalPubsPath))
+        .and(warp::path::end())
+        .and_then(get_ElGamalPubs)
+        .with(cors.clone());
+    let get_ElGamalQChannels = warp::get()
+        .and(warp::path(version))
+        .and(warp::path(public_main_path))
+        .and(warp::path(ElGamalQChannelsPath))
+        .and(warp::path::end())
+        .and_then(get_ElGamalQChannels)
+        .with(cors.clone());
 //      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
 //    let route = warp::any().map(warp::reply).with(cors);
-    let routes = add_requests.or(get_requests).or(update_request).or(private_delete_request).or(public_ordertypes_get_request).or(public_add_requests);
+    let routes = 
+        add_requests.or(get_requests).or(update_request).or(private_delete_request)
+        .or(public_ordertypes_get_request).or(public_add_requests)
+        .or(get_ElGamalPubs).or(get_ElGamalQChannels);
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
 }
+
+async fn get_ElGamalPubs() -> Result<impl warp::Reply, warp::Rejection>
+{
+    let filepath = "ElGamalPubKeys.json";
+    readJSONfromfilepath(filepath).await
+}
+
+async fn get_ElGamalQChannels() -> Result<impl warp::Reply, warp::Rejection>
+{
+    let filepath = "ElGamalQChannels.json";
+    readJSONfromfilepath(filepath).await
+}
+
+async fn readJSONfromfilepath(filepath: &str) -> Result<impl warp::Reply, warp::Rejection>
+{
+    if Path::new(filepath).exists()
+    {
+        let mut file = File::open(filepath).expect("cant open file");
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).expect("cant read file");
+        Ok(warp::reply::json(&json!(contents)))
+    }
+    else
+    {
+        Ok(warp::reply::json(&json!({"none": "none"})))
+    }
+}
+
 
 
 async fn private_delete_request(
