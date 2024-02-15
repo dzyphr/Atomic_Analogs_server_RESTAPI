@@ -104,6 +104,7 @@ async fn main() {
     let OrderTypesPath = "ordertypes";
     let ElGamalPubsPath = "ElGamalPubs";
     let ElGamalQChannelsPath = "ElGamalQChannels";
+    let QPubkeyArrayPath = "QPubkeyArray";
 /*    let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
@@ -194,12 +195,18 @@ async fn main() {
         .and(warp::path::end())
         .and_then(get_ElGamalQChannels)
         .with(cors.clone());
+    let get_QPubkeyArray = warp::get()
+        .and(warp::path(version))
+        .and(warp::path(public_main_path))
+        .and(warp::path(QPubkeyArrayPath))
+        .and(warp::path::end())
+        .and_then(get_QPubkeyArray);
 //      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
 //    let route = warp::any().map(warp::reply).with(cors);
     let routes = 
         add_requests.or(get_requests).or(update_request).or(private_delete_request)
         .or(public_ordertypes_get_request).or(public_add_requests)
-        .or(get_ElGamalPubs).or(get_ElGamalQChannels);
+        .or(get_ElGamalPubs).or(get_ElGamalQChannels).or(get_QPubkeyArray);
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
@@ -216,6 +223,13 @@ async fn get_ElGamalQChannels() -> Result<impl warp::Reply, warp::Rejection>
     let filepath = "ElGamalQChannels.json";
     readJSONfromfilepath(filepath).await
 }
+
+async fn get_QPubkeyArray() -> Result<impl warp::Reply, warp::Rejection>
+{
+    let filepath = "QPubkeyArray.json";
+    readJSONfromfilepath(filepath).await
+}
+
 
 async fn readJSONfromfilepath(filepath: &str) -> Result<impl warp::Reply, warp::Rejection>
 {
