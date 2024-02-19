@@ -200,7 +200,8 @@ async fn main() {
         .and(warp::path(public_main_path))
         .and(warp::path(QPubkeyArrayPath))
         .and(warp::path::end())
-        .and_then(get_QPubkeyArray);
+        .and_then(get_QPubkeyArray)
+        .with(cors.clone());
 //      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
 //    let route = warp::any().map(warp::reply).with(cors);
     let routes = 
