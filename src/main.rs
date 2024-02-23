@@ -66,7 +66,7 @@ fn public_accepted_request_types() -> Vec<&'static str>
 
 
 fn ElGamal_keypaths() -> Vec<&'static str>
-{
+{ //might not need this
     return vec![
         "Key0.ElGamalKey"
     ]
@@ -479,6 +479,11 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let output = &(output.to_owned() + "OrderTypeUUID variable is required!");
             return (status, Some(output.to_string()));
         }
+        if request.QChannel == None
+        {
+            let output = &(output.to_owned() + "QChannel variable is required!");
+            return (status, Some(output.to_string()));
+        }
         if request.ElGamalKey == None
         {
             let output = &(output.to_owned() + "ElGamalKey variable is required!");
@@ -491,6 +496,44 @@ fn handle_request(request: Request) -> (bool, Option<String>)
                                                       //future impl: swapname is sha256 of the
                                                       //public initiation (ensures uniqueness)
 //            dbg!(&swapName);
+            let QPubkeyArrayFilepath = "QPubkeyArray.json";
+            let mut  QPubkeyArrayFile = File::open(QPubkeyArrayFilepath).expect("cant open file");
+            let mut QPubkeyArray =  String::new();
+            QPubkeyArrayFile.read_to_string(&mut QPubkeyArray).expect("cant read file");
+            let QPubkeyArrayMap : HashMap<String, Value> = serde_json::from_str(&QPubkeyArray).expect("Failed to parse JSON");
+            let QCandidate = request.QChannel.clone().unwrap();
+            let mut CompatPubkey = String::new();
+            let mut ElGKeyIndex = String::new();
+            if let Some((key, _)) = QPubkeyArrayMap.iter().find(|(_, &ref v)| *v == *&QPubkeyArrayMap[&QCandidate])
+            {
+                //println!("match");
+                //if we get here we have a compatible pubkey and Q already
+                let CompatPubkey = &QPubkeyArrayMap[&QCandidate];      //compatible pubkey
+                //load key index map
+                let ElGKeyIndexMapFilePath = "ElGKeyIndexFile.json";
+                let mut ElGKeyIndexMapFile = File::open(ElGKeyIndexMapFilePath).expect("cant open file");
+                let mut ElGKeyIndexMapString = String::new();
+                ElGKeyIndexMapFile.read_to_string(&mut ElGKeyIndexMapString).expect("cant read file");
+                let ElGKeyIndexMap : HashMap<String, Value> = serde_json::from_str(&ElGKeyIndexMapString).expect("Failed to parse JSON");
+                if let Some((key, _)) = ElGKeyIndexMap.iter().find(|(_, &ref v)| v == CompatPubkey)
+                {
+                   ElGKeyIndex = key.to_string();
+                }
+                else
+                {
+                    //need to run index update here??
+                }
+            }
+            else
+            {
+                //TODO handle novel Q Channel values given by clients
+                println!("Unhandled: New Q Value Suggested by Client");
+            }
+            //make sure to save chosen pubkey and channel into swap folder
+
+            let ElGamalKeyPath = "Key".to_owned() + &ElGKeyIndex + ".ElGamalKey"; 
+
+
             let filepath = "OrderTypes.json";
             let mut file = File::open(filepath).expect("cant open file");
             let mut contents = String::new();
@@ -501,8 +544,7 @@ fn handle_request(request: Request) -> (bool, Option<String>)
                 rem_first_and_last(&OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string()).to_string(), 0);
             let CrossChainAccountName = accountNameFromChainAndIndex(
                 rem_first_and_last(&OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string()).to_string(), 0);
-            let ElGamalKey = request.ElGamalKey.unwrap();
-            let ElGamalKeyPath = ElGamal_keypaths()[0];
+            let ElGamalKey = request.ElGamalKey.unwrap(); //key sent by client 
             let InitiatorChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string();
             let ResponderChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string();
             
@@ -516,13 +558,13 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             //(this prevents multi-client-claiming locks)
             let command = "python3 ".to_owned()+  "-u "+ "main.py " + "GeneralizedENCInitiationSubroutine " +
                 &swapName.clone() + " " + LocalChainAccountName + " " +
-                CrossChainAccountName + " " + &ElGamalKey + " " + ElGamalKeyPath + " " + 
+                CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
                 &InitiatorChain + " " + &ResponderChain;
             //println!("{}", command);
             let mut pipe = Popen::create(&[
                 "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
                 &swapName.clone(), LocalChainAccountName, 
-                CrossChainAccountName, &ElGamalKey, ElGamalKeyPath,
+                CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
                 &InitiatorChain, &ResponderChain
             ], PopenConfig{
                 stdout: Redirection::Pipe, ..Default::default()}).expect("err");
@@ -764,7 +806,8 @@ struct Request {
     MaxVolCoinA: Option<String>,
     MinVolCoinA: Option<String>,
     SwapTicketID: Option<String>,
-    encryptedResponseBIN: Option<String>
+    encryptedResponseBIN: Option<String>,
+    QChannel: Option<String>
     //ResponderJSONPath not ready yet
 }
 
