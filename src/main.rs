@@ -103,8 +103,8 @@ async fn main() {
     let public_main_path = "publicrequests";
     let OrderTypesPath = "ordertypes";
     let ElGamalPubsPath = "ElGamalPubs";
-    let ElGamalQChannelsPath = "ElGamalQChannels";
-    let QPubkeyArrayPath = "QPubkeyArray";
+    let ElGamalQChannelsPath = "ElGamalQGChannels";
+    let QPubkeyArrayPath = "QGPubkeyArray";
 /*    let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
@@ -221,13 +221,13 @@ async fn get_ElGamalPubs() -> Result<impl warp::Reply, warp::Rejection>
 
 async fn get_ElGamalQChannels() -> Result<impl warp::Reply, warp::Rejection>
 {
-    let filepath = "ElGamalQChannels.json";
+    let filepath = "ElGamalQGChannels.json";
     readJSONfromfilepath(filepath).await
 }
 
 async fn get_QPubkeyArray() -> Result<impl warp::Reply, warp::Rejection>
 {
-    let filepath = "QPubkeyArray.json";
+    let filepath = "QGPubkeyArray.json";
     readJSONfromfilepath(filepath).await
 }
 
@@ -479,9 +479,9 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             let output = &(output.to_owned() + "OrderTypeUUID variable is required!");
             return (status, Some(output.to_string()));
         }
-        if request.QChannel == None
+        if request.QGChannel == None
         {
-            let output = &(output.to_owned() + "QChannel variable is required!");
+            let output = &(output.to_owned() + "QGChannel variable is required!");
             return (status, Some(output.to_string()));
         }
         if request.ElGamalKey == None
@@ -496,26 +496,26 @@ fn handle_request(request: Request) -> (bool, Option<String>)
                                                       //future impl: swapname is sha256 of the
                                                       //public initiation (ensures uniqueness)
 //            dbg!(&swapName);
-            let QPubkeyArrayFilepath = "QPubkeyArray.json";
-            let mut  QPubkeyArrayFile = File::open(QPubkeyArrayFilepath).expect("cant open file");
-            let mut QPubkeyArray =  String::new();
-            QPubkeyArrayFile.read_to_string(&mut QPubkeyArray).expect("cant read file");
-            let QPubkeyArrayMap : HashMap<String, Value> = serde_json::from_str(&QPubkeyArray).expect("Failed to parse JSON");
-            let QCandidate = request.QChannel.clone().unwrap();
+            let QGPubkeyArrayFilepath = "QGPubkeyArray.json";
+            let mut  QGPubkeyArrayFile = File::open(QGPubkeyArrayFilepath).expect("cant open file");
+            let mut QGPubkeyArray =  String::new();
+            QGPubkeyArrayFile.read_to_string(&mut QGPubkeyArray).expect("cant read file");
+            let QGPubkeyArrayMap : HashMap<String, Value> = serde_json::from_str(&QGPubkeyArray).expect("Failed to parse JSON");
+            let QGCandidate = request.QGChannel.clone().unwrap();
             let mut CompatPubkey = String::new();
             let mut ElGKeyIndex = String::new();
-            if let Some((key, _)) = QPubkeyArrayMap.iter().find(|(_, &ref v)| *v == *&QPubkeyArrayMap[&QCandidate])
+            if let Some((key, _)) = QGPubkeyArrayMap.iter().find(|(_, &ref v)| *v == *&QGPubkeyArrayMap[&QGCandidate])
             {
-                //println!("match");
+                let CompatPubkey = &QGPubkeyArrayMap[&QGCandidate];
+                println!("match: qg: {}, pubkey: {}", key, CompatPubkey);
                 //if we get here we have a compatible pubkey and Q already
-                let CompatPubkey = &QPubkeyArrayMap[&QCandidate];      //compatible pubkey
                 //load key index map
-                let ElGKeyIndexMapFilePath = "ElGKeyIndexFile.json";
+                let ElGKeyIndexMapFilePath = "ElGamalPubKeys.json";
                 let mut ElGKeyIndexMapFile = File::open(ElGKeyIndexMapFilePath).expect("cant open file");
                 let mut ElGKeyIndexMapString = String::new();
                 ElGKeyIndexMapFile.read_to_string(&mut ElGKeyIndexMapString).expect("cant read file");
                 let ElGKeyIndexMap : HashMap<String, Value> = serde_json::from_str(&ElGKeyIndexMapString).expect("Failed to parse JSON");
-                if let Some((key, _)) = ElGKeyIndexMap.iter().find(|(_, &ref v)| v == CompatPubkey)
+                if  let Some((key, _)) = ElGKeyIndexMap.iter().find(|(_, &ref v)| v == CompatPubkey)
                 {
                    ElGKeyIndex = key.to_string();
                 }
@@ -807,7 +807,7 @@ struct Request {
     MinVolCoinA: Option<String>,
     SwapTicketID: Option<String>,
     encryptedResponseBIN: Option<String>,
-    QChannel: Option<String>
+    QGChannel: Option<String>
     //ResponderJSONPath not ready yet
 }
 
