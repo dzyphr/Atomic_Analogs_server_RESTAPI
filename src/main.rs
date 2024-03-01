@@ -33,18 +33,37 @@ fn delete_json() -> impl Filter<Extract = (Id,), Error = warp::Rejection> + Clon
     warp::body::content_length_limit(1024 * 1024 * 50/*mb*/).and(warp::body::json())
 }
 
-fn accepted_private_api_keys() -> Vec<&'static str>
-{
-    return vec![
-        "PASSWORD"
-    ]
-}
 
 fn accepted_public_api_keys() -> Vec<&'static str>
 {
     return vec![
         "123"
     ]
+}
+
+
+fn accepted_private_api_keys() -> Vec<String>
+{
+    let accepted_private_api_keys_filepath = "accepted_private_api_keys.json";
+    let mut file = match File::open(&accepted_private_api_keys_filepath) {
+        Ok(file) => file,
+        Err(_) => todo!()
+    };
+    let mut contents = String::new();
+    if let Err(e) = file.read_to_string(&mut contents) {
+        eprintln!("Error reading file: {}", e);
+    }
+    let json_value: Value = match serde_json::from_str(&contents) {
+        Ok(value) => value,
+        Err(_) => todo!()
+    };
+    let values: Vec<String> = json_value
+        .as_object()
+        .expect("JSON should be an object")
+        .values()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    return values
 }
 
 
@@ -120,7 +139,7 @@ async fn main() {
             if auth_header.starts_with("Bearer ")
             {
                 let api_key = auth_header.trim_start_matches("Bearer ").to_string();
-                if accepted_private_api_keys().contains(&api_key.as_str())
+                if accepted_private_api_keys().contains(&api_key)
                 {
                     let response = warp::reply::html("API Key Valid");
                     Ok(response)
