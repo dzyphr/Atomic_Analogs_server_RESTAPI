@@ -67,6 +67,9 @@ fn accepted_private_api_keys() -> Vec<String>
 }
 
 
+
+
+
 fn private_accepted_request_types() -> Vec<&'static str>
 {
     return vec![
@@ -221,16 +224,30 @@ async fn main() {
         .and(warp::path::end())
         .and_then(get_QPubkeyArray)
         .with(cors.clone());
+    let get_starterAPIKeys = warp::get()
+        .and(warp::path(version))
+        .and(warp::path(public_main_path))
+        .and(warp::path(QPubkeyArrayPath))
+        .and(warp::path::end())
+        .and_then(get_starterAPIKeys)
+        .with(cors.clone());
 //      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
 //    let route = warp::any().map(warp::reply).with(cors);
     let routes = 
         add_requests.or(get_requests).or(update_request).or(private_delete_request)
         .or(public_ordertypes_get_request).or(public_add_requests)
-        .or(get_ElGamalPubs).or(get_ElGamalQChannels).or(get_QPubkeyArray);
+        .or(get_ElGamalPubs).or(get_ElGamalQChannels).or(get_QPubkeyArray).or(get_starterAPIKeys);
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
 }
+
+async fn get_starterAPIKeys() -> Result<impl warp::Reply, warp::Rejection>
+{
+    let filepath = "starterAPIKeys.json";
+    readJSONfromfilepath(filepath).await
+}
+
 
 async fn get_ElGamalPubs() -> Result<impl warp::Reply, warp::Rejection>
 {
