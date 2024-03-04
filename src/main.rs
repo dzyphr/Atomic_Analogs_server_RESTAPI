@@ -34,11 +34,28 @@ fn delete_json() -> impl Filter<Extract = (Id,), Error = warp::Rejection> + Clon
 }
 
 
-fn accepted_public_api_keys() -> Vec<&'static str>
+fn accepted_public_api_keys() -> Vec<String>
 {
-    return vec![
-        "123"
-    ]
+    let accepted_private_api_keys_filepath = "accepted_public_api_keys.json";
+    let mut file = match File::open(&accepted_private_api_keys_filepath) {
+        Ok(file) => file,
+        Err(_) => todo!()
+    };
+    let mut contents = String::new();
+    if let Err(e) = file.read_to_string(&mut contents) {
+        eprintln!("Error reading file: {}", e);
+    }
+    let json_value: Value = match serde_json::from_str(&contents) {
+        Ok(value) => value,
+        Err(_) => todo!()
+    };
+    let values: Vec<String> = json_value
+        .as_object()
+        .expect("JSON should be an object")
+        .values()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    return values
 }
 
 
@@ -139,6 +156,26 @@ async fn main() {
         .allow_headers(vec!["Content-Type", "Authorization"]);
     let storage = Storage::new();
     let storage_filter = warp::any().map(move || storage.clone());
+    let bearer_public_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
+            if auth_header.starts_with("Bearer ")
+            {
+                let api_key = auth_header.trim_start_matches("Bearer ").to_string();
+                if accepted_public_api_keys().contains(&api_key)
+                {
+                    let response = warp::reply::html("API Key Valid");
+                    Ok(response)
+                }
+                else
+                {
+                    Err(warp::reject::custom(Badapikey))
+                }
+            }
+            else
+            {
+                Err(warp::reject::custom(Noapikey))
+            }
+    });
+
     let bearer_private_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
             if auth_header.starts_with("Bearer ")
             {
@@ -202,6 +239,7 @@ async fn main() {
         .and(warp::path::end())
         .and(json_body())
         .and(storage_filter.clone())
+        .and(bearer_public_api_key_filter)
         .and_then(public_update_request_map)
         .with(cors.clone());
     let get_ElGamalPubs = warp::get()
@@ -346,6 +384,7 @@ async fn private_update_request_map(
 async fn public_update_request_map(
     request: Request,
     storage: Storage,
+    apikey: Html<&str>
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if public_accepted_request_types().contains(&request.request_type.as_str())
         {
