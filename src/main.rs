@@ -127,6 +127,7 @@ async fn main() {
     let ElGamalPubsPath = "ElGamalPubs";
     let ElGamalQChannelsPath = "ElGamalQGChannels";
     let QPubkeyArrayPath = "QGPubkeyArray";
+    let GetStarterAPIKeysPath = "starterAPIKeys";
 /*    let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
@@ -227,7 +228,7 @@ async fn main() {
     let get_starterAPIKeys = warp::get()
         .and(warp::path(version))
         .and(warp::path(public_main_path))
-        .and(warp::path(QPubkeyArrayPath))
+        .and(warp::path(GetStarterAPIKeysPath))
         .and(warp::path::end())
         .and_then(get_starterAPIKeys)
         .with(cors.clone());
