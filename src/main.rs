@@ -90,7 +90,8 @@ fn accepted_private_api_keys() -> Vec<String>
 fn private_accepted_request_types() -> Vec<&'static str>
 {
     return vec![
-        "publishNewOrderType"
+        "publishNewOrderType",
+        "logInToPasswordEncryptedAccount"
     ]
 }
 
@@ -150,10 +151,11 @@ async fn main() {
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type"])
         .allow_origin("http://localhost:1313");*/
-     let cors = cors()
+    let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type", "Authorization"]);
+
     let storage = Storage::new();
     let storage_filter = warp::any().map(move || storage.clone());
     let bearer_public_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
@@ -345,7 +347,7 @@ async fn private_update_request_map(
         {
             if private_accepted_request_types().contains(&request.request_type.as_str())
             {
-                let (handled, output) = handle_request(request.clone());
+                let (handled, output) = handle_request(request.clone(), storage.clone());
                 if handled == true
                 {
                     storage.request_map.write().insert(request.id, request.request_type);
@@ -388,7 +390,7 @@ async fn public_update_request_map(
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if public_accepted_request_types().contains(&request.request_type.as_str())
         {
-            let (handled, output) = handle_request(request.clone());
+            let (handled, output) = handle_request(request.clone(), storage.clone());
             if handled == true
             {
                 storage.request_map.write().insert(request.id, request.request_type);
@@ -458,7 +460,7 @@ fn rem_first_and_last(value: &str) -> &str {
     chars.as_str()
 }
 
-fn handle_request(request: Request) -> (bool, Option<String>)
+fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
 {
     let mut output = "";
     let mut status = false;
@@ -783,6 +785,60 @@ fn handle_request(request: Request) -> (bool, Option<String>)
             return (status, Some(contents.to_string()))
         }
     }
+    if request.request_type == "logInToPasswordEncryptedAccount"
+    {
+        status = true;
+        if request.Chain == None
+        {
+            let output = &(output.to_owned() + "Chain variable is required!");
+            return (status, Some(output.to_string()));
+        }
+        if request.AccountName == None
+        {
+            let output = &(output.to_owned() + "AccountName variable is required!");
+            return (status, Some(output.to_string()));
+        }
+        if request.Password == None
+        {
+            let output = &(output.to_owned() + "Password variable is required!");
+            return (status, Some(output.to_string()));
+        }
+        else
+        {
+            let mut chainFrameworkPath = String::new();
+            if request.Chain.clone().unwrap() == "TestnetErgo"
+            {
+                chainFrameworkPath = "Ergo/SigmaParticle/".to_string();
+            }
+            if request.Chain.clone().unwrap() == "Sepolia"
+            {
+                chainFrameworkPath = "EVM/Atomicity/".to_string();
+            }
+            let enc_env_path = chainFrameworkPath + &request.AccountName.clone().unwrap() + "/.env.encrypted";
+            let mut pipe = Popen::create(&[
+                "python3",  "-u", "main.py", "proveEncEnvFilePasswordKnowledge",
+                &enc_env_path, &request.Password.clone().unwrap()
+            ], PopenConfig{
+                stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+            let (out, err) = pipe.communicate(None).expect("err");
+            if let Some(exit_status) = pipe.poll()
+            {
+                println!("Out: {:?}, Err: {:?}", out, err);
+                if out == Some("True\n".to_string())
+                {
+//                    println!("PasswordKnowledgeProven");
+                    storage.loggedInAccountMap.write().insert(enc_env_path, request.Password.clone().unwrap());
+                    dbg!(&storage.loggedInAccountMap);
+                }
+                //push success cases to loggedInAccountMap here
+            }
+            else
+            {
+                pipe.terminate().expect("err");
+            }
+            return (status, Some(out.expect("not string").to_string().replace("\n", "")))
+        }
+    }
     //instead of private finalize swap endpoint first accept public postresponse endpoint that
     //checks the value of the coins in the response contract and finalizes based on a pricing
     //algorithm, private calls after generateSwapInitiator would likely only be used in recovery
@@ -838,8 +894,7 @@ fn handle_request(request: Request) -> (bool, Option<String>)
     }
 }
 
-type RequestMap = HashMap<String, String>;
-
+type StringStringMap = HashMap<String, String>;
 #[derive(Debug)]
 struct Badapikey;
 impl warp::reject::Reject for Badapikey {}
@@ -883,19 +938,24 @@ struct Request {
     MinVolCoinA: Option<String>,
     SwapTicketID: Option<String>,
     encryptedResponseBIN: Option<String>,
-    QGChannel: Option<String>
+    QGChannel: Option<String>,
+    AccountName: Option<String>,
+    Password: Option<String>,
+    Chain: Option<String>
     //ResponderJSONPath not ready yet
 }
 
 #[derive(Clone)]
 struct Storage {
-   request_map: Arc<RwLock<RequestMap>>
+   request_map: Arc<RwLock<StringStringMap>>,
+   loggedInAccountMap: Arc<RwLock<StringStringMap>>
 }
 
 impl Storage {
     fn new() -> Self {
         Storage {
             request_map: Arc::new(RwLock::new(HashMap::new())),
+            loggedInAccountMap: Arc::new(RwLock::new(HashMap::new()))
         }
     }
 }
