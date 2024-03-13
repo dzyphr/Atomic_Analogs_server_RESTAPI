@@ -13,6 +13,7 @@ use serde_json::{json, Value, Map};
 use warp::{http, http::Method};
 use std::io::BufReader;
 use std::fs::File;
+use std::fs;
 use std::io::prelude::*;
 use warp::reply::Html;
 use warp::Reply;
@@ -57,7 +58,6 @@ fn accepted_public_api_keys() -> Vec<String>
         .collect();
     return values
 }
-
 
 fn accepted_private_api_keys() -> Vec<String>
 {
@@ -134,8 +134,6 @@ fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str
     }
 }
 
-
-
 #[tokio::main]
 async fn main() {
     let version =  "v0.0.1";
@@ -146,16 +144,10 @@ async fn main() {
     let ElGamalQChannelsPath = "ElGamalQGChannels";
     let QPubkeyArrayPath = "QGPubkeyArray";
     let GetStarterAPIKeysPath = "starterAPIKeys";
-/*    let cors = cors()
-        .allow_any_origin()
-        .allow_methods(vec!["GET", "POST"])
-        .allow_headers(vec!["Content-Type"])
-        .allow_origin("http://localhost:1313");*/
     let cors = cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type", "Authorization"]);
-
     let storage = Storage::new();
     let storage_filter = warp::any().map(move || storage.clone());
     let bearer_public_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
@@ -177,7 +169,6 @@ async fn main() {
                 Err(warp::reject::custom(Noapikey))
             }
     });
-
     let bearer_private_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
             if auth_header.starts_with("Bearer ")
             {
@@ -308,7 +299,6 @@ async fn get_QPubkeyArray() -> Result<impl warp::Reply, warp::Rejection>
     readJSONfromfilepath(filepath).await
 }
 
-
 async fn readJSONfromfilepath(filepath: &str) -> Result<impl warp::Reply, warp::Rejection>
 {
     if Path::new(filepath).exists()
@@ -323,8 +313,6 @@ async fn readJSONfromfilepath(filepath: &str) -> Result<impl warp::Reply, warp::
         Ok(warp::reply::json(&json!({"none": "none"})))
     }
 }
-
-
 
 async fn private_delete_request(
     id: Id,
@@ -394,15 +382,12 @@ async fn public_update_request_map(
             if handled == true
             {
                 storage.request_map.write().insert(request.id, request.request_type);
-                
                 Ok(
                     warp::reply::with_status(
                             format!("{:?}",  output.unwrap()),
                             http::StatusCode::OK,
                     )
                 )
-                
-
             }
             else
             {
@@ -426,7 +411,6 @@ async fn public_update_request_map(
             Err(warp::reject::custom(Badrequesttype))
         }
 }
-
 
 async fn get_ordertypes() -> Result<impl warp::Reply, warp::Rejection>
 {
@@ -607,7 +591,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 //TODO handle novel Q Channel values given by clients
                 println!("Unhandled: New Q Value Suggested by Client");
             }
-            //make sure to save chosen pubkey and channel into swap folder
+            //MAJOR TODO TODO:!!!!make sure to save chosen pubkey and channel into swap folder!!!TODO TODO
 
             let ElGamalKeyPath = "Key".to_owned() + &ElGKeyIndex + ".ElGamalKey"; 
 
@@ -634,41 +618,137 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             //restructure as: public call to generate an initiation specific to clients ElGamal Key
             //server responds with generic committment to specific ElGamal Key 
             //(this prevents multi-client-claiming locks)
-            let command = "python3 ".to_owned()+  "-u "+ "main.py " + "GeneralizedENCInitiationSubroutine " +
-                &swapName.clone() + " " + LocalChainAccountName + " " +
-                CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
-                &InitiatorChain + " " + &ResponderChain;
-            //println!("{}", command);
-            let mut pipe = Popen::create(&[
-                "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
-                &swapName.clone(), LocalChainAccountName, 
-                CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
-                &InitiatorChain, &ResponderChain
-            ], PopenConfig{
-                stdout: Redirection::Pipe, ..Default::default()}).expect("err");
-            let (out, err) = pipe.communicate(None).expect("err");
-            if let Some(exit_status) = pipe.poll()
+            //
+            //check for encrypted account paths
+            //if they exist check for those accounts to be logged in
+            //if they are not prompt server to log them in
+            //if they are proceed with a different command that includes their passwords as last 2
+            //args
+            fn checkAccountLoggedInStatus(accountName: &str, storage: Storage) -> bool
             {
-                println!("Out: {:?}, Err: {:?}", out, err)
+                let s = storage.loggedInAccountMap.read().clone();
+                return s.contains_key(accountName)  
             }
-            else
+            let mut localChainAccountPassword = String::new();
+            let mut crossChainAccountPassword = String::new();
+            if InitiatorChain == "TestnetErgo"
             {
-                pipe.terminate().expect("err");
+                let chainFrameworkPath = "Ergo/SigmaParticle/";
+                let encEnvPath = chainFrameworkPath.to_owned() + LocalChainAccountName + "/.env.encrypted";
+                let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
+                    true
+                } else {
+                    false
+                };
+                if exists
+                {
+                    if checkAccountLoggedInStatus(LocalChainAccountName, storage.clone()) == true
+                    {
+                        localChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
+                    }
+                    else
+                    {
+                        let errstr = LocalChainAccountName.to_owned() + "is not logged in!";
+                        dbg!(&errstr);
+                        return (false, Some(errstr.to_string()))
+                    }
+                }
             }
-            let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
-            let mut buf_reader = BufReader::new(file);
-            let mut contents = String::new();
-            let mut filepath = swapName.clone() + "/OrderTypeUUID";
-            let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
-            f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
-            f.flush().expect("error flushing");
-            buf_reader.read_to_string(&mut contents).expect("cannot read file");
-            let mut outputjson =
-                json!({
-                    "SwapTicketID":  swapName.clone(),
-                    "ENC_init.bin": contents
-                });
-            return (status, Some(outputjson.to_string()))
+            if ResponderChain == "Sepolia"
+            {
+                let chainFrameworkPath = "EVM/Atomicity/";
+                let encEnvPath = chainFrameworkPath.to_owned() + CrossChainAccountName + "/.env.encrypted";
+                let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
+                    true
+                } else {
+                    false
+                };
+                if exists
+                {
+                    if checkAccountLoggedInStatus(CrossChainAccountName, storage.clone()) == true
+                    {
+                        crossChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
+                    }
+                    else
+                    {
+                        let errstr = CrossChainAccountName.to_owned() + "is not logged in!";
+                        dbg!(&errstr);
+                        return (false, Some(errstr.to_string()))
+                    }
+                }
+            }
+            if localChainAccountPassword == "" && crossChainAccountPassword == ""
+            {
+                let command = "python3 ".to_owned()+  "-u "+ "main.py " + "GeneralizedENCInitiationSubroutine " +
+                    &swapName.clone() + " " + LocalChainAccountName + " " +
+                    CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
+                    &InitiatorChain + " " + &ResponderChain;
+                //println!("{}", command);
+                let mut pipe = Popen::create(&[
+                    "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
+                    &swapName.clone(), LocalChainAccountName, 
+                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &InitiatorChain, &ResponderChain
+                ], PopenConfig{
+                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                let (out, err) = pipe.communicate(None).expect("err");
+                if let Some(exit_status) = pipe.poll()
+                {
+                    println!("Out: {:?}, Err: {:?}", out, err)
+                }
+                else
+                {
+                    pipe.terminate().expect("err");
+                }
+                let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
+                let mut buf_reader = BufReader::new(file);
+                let mut contents = String::new();
+                let mut filepath = swapName.clone() + "/OrderTypeUUID";
+                let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
+                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.flush().expect("error flushing");
+                buf_reader.read_to_string(&mut contents).expect("cannot read file");
+                let mut outputjson =
+                    json!({
+                        "SwapTicketID":  swapName.clone(),
+                        "ENC_init.bin": contents
+                    });
+                return (status, Some(outputjson.to_string()))
+            }
+            else if localChainAccountPassword != "" && crossChainAccountPassword != ""
+            {
+                let mut pipe = Popen::create(&[
+                    "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
+                    &swapName.clone(), LocalChainAccountName,
+                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &InitiatorChain, &ResponderChain,
+                    &localChainAccountPassword, &crossChainAccountPassword
+                ], PopenConfig{
+                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                let (out, err) = pipe.communicate(None).expect("err");
+                if let Some(exit_status) = pipe.poll()
+                {
+                    println!("Out: {:?}, Err: {:?}", out, err)
+                }
+                else
+                {
+                    pipe.terminate().expect("err");
+                }
+                let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
+                let mut buf_reader = BufReader::new(file);
+                let mut contents = String::new();
+                let mut filepath = swapName.clone() + "/OrderTypeUUID";
+                let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
+                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.flush().expect("error flushing");
+                buf_reader.read_to_string(&mut contents).expect("cannot read file");
+                let mut outputjson =
+                    json!({
+                        "SwapTicketID":  swapName.clone(),
+                        "ENC_init.bin": contents
+                    });
+                return (status, Some(outputjson.to_string()))
+            }
         }
         //handle a response w public request, return the finalization IF AND ONLY IF our Servers
         //pricing logic time lock security logic etc... agrees with the swap data
@@ -894,7 +974,6 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
     }
 }
 
-type StringStringMap = HashMap<String, String>;
 #[derive(Debug)]
 struct Badapikey;
 impl warp::reject::Reject for Badapikey {}
@@ -945,6 +1024,8 @@ struct Request {
     //ResponderJSONPath not ready yet
 }
 
+type StringStringMap = HashMap<String, String>;
+
 #[derive(Clone)]
 struct Storage {
    request_map: Arc<RwLock<StringStringMap>>,
@@ -952,6 +1033,10 @@ struct Storage {
 }
 
 impl Storage {
+    fn contains_key(&self, key: &str) -> bool{
+        self.loggedInAccountMap.read().contains_key(key)
+    }
+
     fn new() -> Self {
         Storage {
             request_map: Arc::new(RwLock::new(HashMap::new())),
