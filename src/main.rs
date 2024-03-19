@@ -22,97 +22,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use subprocess::{PopenConfig, Popen, Redirection};
-fn json_body() -> impl Filter<Extract = (Request,), Error = warp::Rejection> + Clone {
-    // When accepting a body, we want a JSON body
-    // (and to reject huge payloads)...
-    warp::body::content_length_limit(1024 * 1024 * 50/*mb*/).and(warp::body::json())
-}
+mod json_fns;
+use json_fns::{json_body, delete_json, readJSONfromfilepath};
+mod API_keys;
+use API_keys::{accepted_public_api_keys, accepted_private_api_keys};
+mod accepted_request_types;
+use accepted_request_types::{private_accepted_request_types, public_accepted_request_types};
+mod get_fns;
+use get_fns::{get_starterAPIKeys, get_ElGamalPubs, get_ElGamalQGChannels, get_QGPubkeyArray, get_ordertypes, private_get_request_map};
+mod delete_fns;
+use delete_fns::{private_delete_request};
+mod update_fns;
+use update_fns::{public_update_request_map, private_update_request_map};
+mod str_tools;
+use str_tools::{rem_first_and_last};
 
-fn delete_json() -> impl Filter<Extract = (Id,), Error = warp::Rejection> + Clone {
-    // When accepting a body, we want a JSON body
-    // (and to reject huge payloads)...
-    warp::body::content_length_limit(1024 * 1024 * 50/*mb*/).and(warp::body::json())
-}
-
-
-fn accepted_public_api_keys() -> Vec<String>
-{
-    let accepted_private_api_keys_filepath = "accepted_public_api_keys.json";
-    let mut file = match File::open(&accepted_private_api_keys_filepath) {
-        Ok(file) => file,
-        Err(_) => todo!()
-    };
-    let mut contents = String::new();
-    if let Err(e) = file.read_to_string(&mut contents) {
-        eprintln!("Error reading file: {}", e);
-    }
-    let json_value: Value = match serde_json::from_str(&contents) {
-        Ok(value) => value,
-        Err(_) => todo!()
-    };
-    let values: Vec<String> = json_value
-        .as_object()
-        .expect("JSON should be an object")
-        .values()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect();
-    return values
-}
-
-fn accepted_private_api_keys() -> Vec<String>
-{
-    let accepted_private_api_keys_filepath = "accepted_private_api_keys.json";
-    let mut file = match File::open(&accepted_private_api_keys_filepath) {
-        Ok(file) => file,
-        Err(_) => todo!()
-    };
-    let mut contents = String::new();
-    if let Err(e) = file.read_to_string(&mut contents) {
-        eprintln!("Error reading file: {}", e);
-    }
-    let json_value: Value = match serde_json::from_str(&contents) {
-        Ok(value) => value,
-        Err(_) => todo!()
-    };
-    let values: Vec<String> = json_value
-        .as_object()
-        .expect("JSON should be an object")
-        .values()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect();
-    return values
-}
-
-
-
-
-
-fn private_accepted_request_types() -> Vec<&'static str>
-{
-    return vec![
-        "publishNewOrderType",
-        "logInToPasswordEncryptedAccount"
-    ]
-}
-
-fn public_accepted_request_types() -> Vec<&'static str>
-{
-    return vec![
-        "requestEncryptedInitiation",
-        "submitEncryptedResponse"
-
-    ]
-}
-
-
-fn ElGamal_keypaths() -> Vec<&'static str>
-{ //might not need this
-    return vec![
-        "Key0.ElGamalKey"
-    ]
-}
-
-fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str
+fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str //TODO replace: modularize from accounts found on refresh
 {
     if chain == "TestnetErgo"
     {
@@ -134,6 +59,7 @@ fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str
     }
 }
 
+
 #[tokio::main]
 async fn main() {
     let version =  "v0.0.1";
@@ -141,8 +67,8 @@ async fn main() {
     let public_main_path = "publicrequests";
     let OrderTypesPath = "ordertypes";
     let ElGamalPubsPath = "ElGamalPubs";
-    let ElGamalQChannelsPath = "ElGamalQGChannels";
-    let QPubkeyArrayPath = "QGPubkeyArray";
+    let ElGamalQGChannelsPath = "ElGamalQGChannels";
+    let QGPubkeyArrayPath = "QGPubkeyArray";
     let GetStarterAPIKeysPath = "starterAPIKeys";
     let cors = cors()
         .allow_any_origin()
@@ -242,19 +168,19 @@ async fn main() {
         .and(warp::path::end())
         .and_then(get_ElGamalPubs)
         .with(cors.clone());
-    let get_ElGamalQChannels = warp::get()
+    let get_ElGamalQGChannels = warp::get()
         .and(warp::path(version))
         .and(warp::path(public_main_path))
-        .and(warp::path(ElGamalQChannelsPath))
+        .and(warp::path(ElGamalQGChannelsPath))
         .and(warp::path::end())
-        .and_then(get_ElGamalQChannels)
+        .and_then(get_ElGamalQGChannels)
         .with(cors.clone());
-    let get_QPubkeyArray = warp::get()
+    let get_QGPubkeyArray = warp::get()
         .and(warp::path(version))
         .and(warp::path(public_main_path))
-        .and(warp::path(QPubkeyArrayPath))
+        .and(warp::path(QGPubkeyArrayPath))
         .and(warp::path::end())
-        .and_then(get_QPubkeyArray)
+        .and_then(get_QGPubkeyArray)
         .with(cors.clone());
     let get_starterAPIKeys = warp::get()
         .and(warp::path(version))
@@ -263,185 +189,13 @@ async fn main() {
         .and(warp::path::end())
         .and_then(get_starterAPIKeys)
         .with(cors.clone());
-//      .map(|_| warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", HeaderValue::from_static("*")));
-//    let route = warp::any().map(warp::reply).with(cors);
     let routes = 
         add_requests.or(get_requests).or(update_request).or(private_delete_request)
         .or(public_ordertypes_get_request).or(public_add_requests)
-        .or(get_ElGamalPubs).or(get_ElGamalQChannels).or(get_QPubkeyArray).or(get_starterAPIKeys);
+        .or(get_ElGamalPubs).or(get_ElGamalQGChannels).or(get_QGPubkeyArray).or(get_starterAPIKeys);
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
-}
-
-async fn get_starterAPIKeys() -> Result<impl warp::Reply, warp::Rejection>
-{
-    let filepath = "starterAPIKeys.json";
-    readJSONfromfilepath(filepath).await
-}
-
-
-async fn get_ElGamalPubs() -> Result<impl warp::Reply, warp::Rejection>
-{
-    let filepath = "ElGamalPubKeys.json";
-    readJSONfromfilepath(filepath).await
-}
-
-async fn get_ElGamalQChannels() -> Result<impl warp::Reply, warp::Rejection>
-{
-    let filepath = "ElGamalQGChannels.json";
-    readJSONfromfilepath(filepath).await
-}
-
-async fn get_QPubkeyArray() -> Result<impl warp::Reply, warp::Rejection>
-{
-    let filepath = "QGPubkeyArray.json";
-    readJSONfromfilepath(filepath).await
-}
-
-async fn readJSONfromfilepath(filepath: &str) -> Result<impl warp::Reply, warp::Rejection>
-{
-    if Path::new(filepath).exists()
-    {
-        let mut file = File::open(filepath).expect("cant open file");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).expect("cant read file");
-        Ok(warp::reply::json(&json!(contents)))
-    }
-    else
-    {
-        Ok(warp::reply::json(&json!({"none": "none"})))
-    }
-}
-
-async fn private_delete_request(
-    id: Id,
-    storage: Storage,
-    apikey: Html<&str>
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        storage.request_map.write().remove(&id.id);
-        Ok(warp::reply::with_status(
-            "Removed request from request list",
-            http::StatusCode::OK,
-        ))
-}
-
-async fn private_update_request_map(
-    request: Request,
-    storage: Storage,
-    apikey: Html<&str>
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        if storage.request_map.read().contains_key(&request.id) == false //prevent overwriting request ids
-        {
-            if private_accepted_request_types().contains(&request.request_type.as_str())
-            {
-                let (handled, output) = handle_request(request.clone(), storage.clone());
-                if handled == true
-                {
-                    storage.request_map.write().insert(request.id, request.request_type);
-                    Ok(warp::reply::with_status(
-                        format!("{:?}",  output.unwrap()),
-                        http::StatusCode::CREATED,
-                    ))
-                }
-                else
-                {
-                    match output{
-                        Some(ref errorstring) =>
-                            Ok(warp::reply::with_status(
-                                format!("Request Denied\n {:?}", output.unwrap()),
-                                http::StatusCode::METHOD_NOT_ALLOWED
-                            )),
-                        None =>
-                            Ok(warp::reply::with_status(
-                                format!("Request Denied\n"),
-                                http::StatusCode::METHOD_NOT_ALLOWED
-                            ))
-                    }
-                }
-            }
-            else
-            {
-                Err(warp::reject::custom(Badrequesttype))
-            }
-        }
-        else
-        {
-            Err(warp::reject::custom(Duplicateid))
-        }
-}
-
-async fn public_update_request_map(
-    request: Request,
-    storage: Storage,
-    apikey: Html<&str>
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        if public_accepted_request_types().contains(&request.request_type.as_str())
-        {
-            let (handled, output) = handle_request(request.clone(), storage.clone());
-            if handled == true
-            {
-                storage.request_map.write().insert(request.id, request.request_type);
-                Ok(
-                    warp::reply::with_status(
-                            format!("{:?}",  output.unwrap()),
-                            http::StatusCode::OK,
-                    )
-                )
-            }
-            else
-            {
-
-               match output{
-                        Some(ref errorstring) =>
-                            Ok(warp::reply::with_status(
-                                format!("Request Denied\n {:?}", output.unwrap()),
-                                http::StatusCode::METHOD_NOT_ALLOWED
-                            )),
-                        None =>
-                            Ok(warp::reply::with_status(
-                                format!("Request Denied\n"),
-                                http::StatusCode::METHOD_NOT_ALLOWED
-                            ))
-                } 
-            }
-        }
-        else
-        {
-            Err(warp::reject::custom(Badrequesttype))
-        }
-}
-
-async fn get_ordertypes() -> Result<impl warp::Reply, warp::Rejection>
-{
-    let filepath = "OrderTypes.json";
-    if Path::new(filepath).exists()
-    {
-        let mut file = File::open(filepath).expect("cant open file");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).expect("cant read file");
-        Ok(warp::reply::json(&json!(contents)))
-    }
-    else
-    {
-        Ok(warp::reply::json(&json!({"none": "none"})))
-    }
-
-}
-
-async fn private_get_request_map(
-    storage: Storage,
-    apikey: Html<&str>
-    ) -> Result<impl warp::Reply, warp::Rejection> {
-        let result = storage.request_map.read();
-        Ok(warp::reply::json(&*result))
-}
-
-fn rem_first_and_last(value: &str) -> &str {
-    let mut chars = value.chars();
-    chars.next();
-    chars.next_back();
-    chars.as_str()
 }
 
 fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
@@ -607,8 +361,8 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             let CrossChainAccountName = accountNameFromChainAndIndex(
                 rem_first_and_last(&OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string()).to_string(), 0);
             let ElGamalKey = request.ElGamalKey.unwrap(); //key sent by client 
-            let InitiatorChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string();
-            let ResponderChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string();
+            let InitiatorChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string().replace("\"", "");;
+            let ResponderChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string().replace("\"", "");;
             
             //define order types by UUID
             //on servers end privately apply swap order information coinA / price coinB / price 
@@ -624,17 +378,20 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             //if they are not prompt server to log them in
             //if they are proceed with a different command that includes their passwords as last 2
             //args
-            fn checkAccountLoggedInStatus(accountName: &str, storage: Storage) -> bool
+            fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
             {
                 let s = storage.loggedInAccountMap.read().clone();
-                return s.contains_key(accountName)  
+                return s.contains_key(encEnvPath)  
             }
             let mut localChainAccountPassword = String::new();
             let mut crossChainAccountPassword = String::new();
+            dbg!(&InitiatorChain);
+            dbg!(&ResponderChain);
             if InitiatorChain == "TestnetErgo"
             {
                 let chainFrameworkPath = "Ergo/SigmaParticle/";
                 let encEnvPath = chainFrameworkPath.to_owned() + LocalChainAccountName + "/.env.encrypted";
+                dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
                 } else {
@@ -642,13 +399,13 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 };
                 if exists
                 {
-                    if checkAccountLoggedInStatus(LocalChainAccountName, storage.clone()) == true
+                    if checkAccountLoggedInStatus(&encEnvPath, storage.clone()) == true
                     {
                         localChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
                     }
                     else
                     {
-                        let errstr = LocalChainAccountName.to_owned() + "is not logged in!";
+                        let errstr = InitiatorChain.to_owned() + " " +  &LocalChainAccountName + " is not logged in!";
                         dbg!(&errstr);
                         return (false, Some(errstr.to_string()))
                     }
@@ -658,6 +415,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             {
                 let chainFrameworkPath = "EVM/Atomicity/";
                 let encEnvPath = chainFrameworkPath.to_owned() + CrossChainAccountName + "/.env.encrypted";
+                dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
                 } else {
@@ -665,13 +423,13 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 };
                 if exists
                 {
-                    if checkAccountLoggedInStatus(CrossChainAccountName, storage.clone()) == true
+                    if checkAccountLoggedInStatus(&encEnvPath, storage.clone()) == true
                     {
                         crossChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
                     }
                     else
                     {
-                        let errstr = CrossChainAccountName.to_owned() + "is not logged in!";
+                        let errstr = ResponderChain.to_owned() + " " + &CrossChainAccountName + " is not logged in!";
                         dbg!(&errstr);
                         return (false, Some(errstr.to_string()))
                     }
@@ -975,29 +733,29 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
 }
 
 #[derive(Debug)]
-struct Badapikey;
+pub struct Badapikey;
 impl warp::reject::Reject for Badapikey {}
 
 #[derive(Debug)]
-struct Noapikey;
+pub struct Noapikey;
 impl warp::reject::Reject for Noapikey {}
 
 #[derive(Debug)]
-struct Duplicateid;
+pub struct Duplicateid;
 impl warp::reject::Reject for Duplicateid {}
 
 #[derive(Debug)]
-struct Badrequesttype;
+pub struct Badrequesttype;
 impl warp::reject::Reject for Badrequesttype {}
 
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct Id {
+pub struct Id {
     id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct Request {
+pub struct Request {
     id: String,
     request_type: String,
     swapName: Option<String>,
@@ -1027,7 +785,7 @@ struct Request {
 type StringStringMap = HashMap<String, String>;
 
 #[derive(Clone)]
-struct Storage {
+pub struct Storage {
    request_map: Arc<RwLock<StringStringMap>>,
    loggedInAccountMap: Arc<RwLock<StringStringMap>>
 }
