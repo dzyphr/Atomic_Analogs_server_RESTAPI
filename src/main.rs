@@ -23,13 +23,15 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use subprocess::{PopenConfig, Popen, Redirection};
 mod json_fns;
-use json_fns::{json_body, delete_json, readJSONfromfilepath};
+use json_fns::{json_body, delete_json};
 mod API_keys;
 use API_keys::{accepted_public_api_keys, accepted_private_api_keys};
 mod accepted_request_types;
 use accepted_request_types::{private_accepted_request_types, public_accepted_request_types};
 mod get_fns;
 use get_fns::{get_starterAPIKeys, get_ElGamalPubs, get_ElGamalQGChannels, get_QGPubkeyArray, get_ordertypes, private_get_request_map};
+mod json_tools;
+use json_tools::{readJSONfromfilepath};
 mod delete_fns;
 use delete_fns::{private_delete_request};
 mod update_fns;
@@ -435,7 +437,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                 }
             }
-            if localChainAccountPassword == "" && crossChainAccountPassword == ""
+            if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
                 let command = "python3 ".to_owned()+  "-u "+ "main.py " + "GeneralizedENCInitiationSubroutine " +
                     &swapName.clone() + " " + LocalChainAccountName + " " +
@@ -473,7 +475,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     });
                 return (status, Some(outputjson.to_string()))
             }
-            else if localChainAccountPassword != "" && crossChainAccountPassword != ""
+            else if localChainAccountPassword != String::new() && crossChainAccountPassword != String::new()
             {
                 let mut pipe = Popen::create(&[
                     "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
@@ -552,74 +554,219 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             let CoinA_Price = &OrderTypeMap[&OrderTypeUUID]["CoinA_price"];
             let CoinB_Price = &OrderTypeMap[&OrderTypeUUID]["CoinB_price"];
             dbg!(CoinA_Price, CoinB_Price);
-            let mut pipe = Popen::create(&[
-                "python3",  "-u", "main.py", 
-                "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
-                &CoinA_Price.to_string(), &CoinB_Price.to_string()
-            ], PopenConfig{
-                stdout: Redirection::Pipe, ..Default::default()}).expect("err");
-            let (out, err) = pipe.communicate(None).expect("err");
-            if let Some(exit_status) = pipe.poll()
+            fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
             {
-                println!("Out: {:?}, Err: {:?}", out, err)
+                let s = storage.loggedInAccountMap.read().clone();
+                return s.contains_key(encEnvPath)
+            }
+
+            let InitiatorChain = OrderTypeMap[&OrderTypeUUID.clone()]["CoinA"].to_string().replace("\"", "");
+            let ResponderChain = OrderTypeMap[&OrderTypeUUID.clone()]["CoinB"].to_string().replace("\"", "");
+            let LocalChainAccountName = accountNameFromChainAndIndex(
+                rem_first_and_last(&OrderTypeMap[&OrderTypeUUID.clone()]["CoinA"].to_string()).to_string(), 0);
+            let CrossChainAccountName = accountNameFromChainAndIndex(
+                rem_first_and_last(&OrderTypeMap[&OrderTypeUUID.clone()]["CoinB"].to_string()).to_string(), 0);
+
+
+            let mut localChainAccountPassword = String::new();
+            let mut crossChainAccountPassword = String::new();
+            dbg!(&InitiatorChain);
+            dbg!(&ResponderChain);
+            if InitiatorChain == "TestnetErgo"
+            {
+                let chainFrameworkPath = "Ergo/SigmaParticle/";
+                let encEnvPath = chainFrameworkPath.to_owned() + LocalChainAccountName + "/.env.encrypted";
+                dbg!(&encEnvPath);
+                let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
+                    true
+                } else {
+                    false
+                };
+                if exists
+                {
+                    if checkAccountLoggedInStatus(&encEnvPath, storage.clone()) == true
+                    {
+                        localChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
+                    }
+                    else
+                    {
+                        let errstr = InitiatorChain.to_owned() + " " +  &LocalChainAccountName + " is not logged in!";
+                        dbg!(&errstr);
+                        return (false, Some(errstr.to_string()))
+                    }
+                }
+            }
+            if ResponderChain == "Sepolia"
+            {
+                let chainFrameworkPath = "EVM/Atomicity/";
+                let encEnvPath = chainFrameworkPath.to_owned() + CrossChainAccountName + "/.env.encrypted";
+                dbg!(&encEnvPath);
+                let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
+                    true
+                } else {
+                    false
+                };
+                if exists
+                {
+                    if checkAccountLoggedInStatus(&encEnvPath, storage.clone()) == true
+                    {
+                        crossChainAccountPassword = storage.loggedInAccountMap.read()[&encEnvPath].clone();
+                    }
+                    else
+                    {
+                        let errstr = ResponderChain.to_owned() + " " + &CrossChainAccountName + " is not logged in!";
+                        dbg!(&errstr);
+                        return (false, Some(errstr.to_string()))
+                    }
+                }
+            }
+            if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
+            {
+                let mut pipe = Popen::create(&[
+                    "python3",  "-u", "main.py", 
+                    "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
+                    &CoinA_Price.to_string(), &CoinB_Price.to_string()
+                ], PopenConfig{
+                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                let (out, err) = pipe.communicate(None).expect("err");
+                if let Some(exit_status) = pipe.poll()
+                {
+                    println!("Out: {:?}, Err: {:?}", out, err)
+                }
+                else
+                {
+                    pipe.terminate().expect("err");
+                }
             }
             else
             {
-                pipe.terminate().expect("err");
-            }        
+                let mut pipe = Popen::create(&[
+                    "python3",  "-u", "main.py",
+                    "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
+                    &CoinA_Price.to_string(), &CoinB_Price.to_string(), 
+                    &localChainAccountPassword, &crossChainAccountPassword
+                ], PopenConfig{
+                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                let (out, err) = pipe.communicate(None).expect("err");
+                if let Some(exit_status) = pipe.poll()
+                {
+                    println!("Out: {:?}, Err: {:?}", out, err)
+                }
+                else
+                {
+                    pipe.terminate().expect("err");
+                }
+            }
             let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
             let mut file = File::open(filepath).expect("cant open file");
             let mut contents = String::new();
             file.read_to_string(&mut contents).expect("cant read file");
-            let child_thread = thread::spawn(move|| {
-                let mut child_process = 
-                    Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
-                    .arg(initiatorJSONPath)
-                    .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                    .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                    .spawn()
-                    .expect("Failed to start subprocess");
+            if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
+            {
+                let child_thread = thread::spawn(move|| {
+                    let mut child_process = 
+                        Command::new("python3")
+                        .arg("-u")
+                        .arg("main.py")
+                        .arg("GeneralizedENC_InitiatorClaimSubroutine")
+                        .arg(initiatorJSONPath)
+                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
+                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
+                        .spawn()
+                        .expect("Failed to start subprocess");
 
-                let mut output = String::new();
-                let mut error_output = String::new();
+                    let mut output = String::new();
+                    let mut error_output = String::new();
 
-                if let Some(ref mut stdout) = child_process.stdout 
-                {
-                    stdout.read_to_string(&mut output).expect("Failed to read stdout");
-                } 
-                else 
-                {
-                    eprintln!("Failed to capture stdout.");
-                }
+                    if let Some(ref mut stdout) = child_process.stdout 
+                    {
+                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
+                    } 
+                    else 
+                    {
+                        eprintln!("Failed to capture stdout.");
+                    }
 
-                if let Some(ref mut stderr) = child_process.stderr 
-                {
-                    stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-                } 
-                else 
-                {
-                    eprintln!("Failed to capture stderr.");
-                }
-/*
-                let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                if !exit_status.success() {
-                    eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                }
-                eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                eprintln!("Subprocess error output:\n{}", error_output);
-
-                */
-                let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                if exit_status.success() {
-                    println!("Subprocess output:\n{}", output);
-                } else {
+                    if let Some(ref mut stderr) = child_process.stderr 
+                    {
+                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
+                    } 
+                    else 
+                    {
+                        eprintln!("Failed to capture stderr.");
+                    }
+    /*
+                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                    if !exit_status.success() {
+                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                    }
                     eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                     eprintln!("Subprocess error output:\n{}", error_output);
-                }
-            });
+
+                    */
+                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                    if exit_status.success() {
+                        println!("Subprocess output:\n{}", output);
+                    } else {
+                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                        eprintln!("Subprocess error output:\n{}", error_output);
+                    }
+                });
+            }
+            else
+            {
+                let child_thread = thread::spawn(move|| {
+                    let mut child_process =
+                        Command::new("python3")
+                        .arg("-u")
+                        .arg("main.py")
+                        .arg("GeneralizedENC_InitiatorClaimSubroutine")
+                        .arg(initiatorJSONPath)
+                        .arg(localChainAccountPassword)
+                        .arg(crossChainAccountPassword)
+                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
+                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
+                        .spawn()
+                        .expect("Failed to start subprocess");
+
+                    let mut output = String::new();
+                    let mut error_output = String::new();
+
+                    if let Some(ref mut stdout) = child_process.stdout
+                    {
+                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
+                    }
+                    else
+                    {
+                        eprintln!("Failed to capture stdout.");
+                    }
+
+                    if let Some(ref mut stderr) = child_process.stderr
+                    {
+                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
+                    }
+                    else
+                    {
+                        eprintln!("Failed to capture stderr.");
+                    }
+    /*
+                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                    if !exit_status.success() {
+                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                    }
+                    eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                    eprintln!("Subprocess error output:\n{}", error_output);
+
+                    */
+                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
+                    if exit_status.success() {
+                        println!("Subprocess output:\n{}", output);
+                    } else {
+                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
+                        eprintln!("Subprocess error output:\n{}", error_output);
+                    }
+                });
+            }
             return (status, Some(contents.to_string()))
         }
     }

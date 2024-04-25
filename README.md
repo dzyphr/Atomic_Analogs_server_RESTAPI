@@ -10,11 +10,12 @@
 
 ## Key Features
 
-* Private Function Endpoints
+* Public Function Endpoints
   - requestEncryptedInitiation
   - submitEncryptedResponse
-* Public Function Endpoints
+* Private Function Endpoints
   - publishNewOrderType
+  - logInToPasswordEncryptedAccount
 * URL Endpoints 
   - version: v0.0.1
   - main_path: requests
