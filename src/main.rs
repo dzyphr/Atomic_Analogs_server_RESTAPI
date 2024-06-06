@@ -20,6 +20,7 @@ use warp::Reply;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use subprocess::{PopenConfig, Popen, Redirection};
 mod json_fns;
@@ -38,6 +39,74 @@ mod update_fns;
 use update_fns::{public_update_request_map, private_update_request_map};
 mod str_tools;
 use str_tools::{rem_first_and_last};
+
+fn insert_into_nested_map(
+    outer_map: &mut SingleNestMap,
+    outer_key: &str,
+    inner_key: &str,
+    inner_value: &str,
+) ->  SingleNestMap
+{
+    outer_map
+        .entry(outer_key.to_string())
+        .or_insert_with(HashMap::new)
+        .insert(inner_key.to_string(), inner_value.to_string());
+    return outer_map.clone()
+}
+
+fn set_swap_state(swapName: &str, state: &str) -> bool
+{
+    let PossibleSwapStatesInitiator = vec!["initiating", "initiated_unsubmitted", "initiated_submitted", "responded", "verifying_response", "verified_response", "finalizing", "finalized_unsubmitted", "finalized_submitted", "claiming", "refunding", "claimed", "refunded", "terminated", "tbd"];
+    if !PossibleSwapStatesInitiator.contains(&state)
+    {
+        dbg!("Please provide valid state argument choice.\nChoices: initiated, uploadingResponseContract, fundingResponseContract, responded, finalized, verifyingFinalizedContractValues, claiming, refunding, claimed, refunded, terminated, tbd");
+        return false
+    }
+    if !is_directory(&swapName)
+    {
+        dbg!("Swap directory named: ".to_owned() +  swapName +  "not found!\nMake sure swap dir is created before setting it's state.");
+        return false
+    }
+    let mut map = load_local_swap_state_map(); //handles creation of the map if its not there
+    if map.contains_key(swapName)
+    {
+        map = insert_into_nested_map(&mut map, swapName, "SwapState", state)
+    }
+    else
+    {
+        let mut innermap: HashMap<String, String> = HashMap::new();
+        innermap.insert("SwapState".to_string(), state.to_string());
+        map.insert(swapName.to_string(), innermap);
+    }
+    update_local_swap_state_map(map);
+    fs::write(swapName.to_owned() + "/SwapState", state).expect("error writing SwapState");
+    return true;
+
+}
+
+
+
+
+fn is_directory(path: &str) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) => metadata.is_dir(),
+        Err(_) => false,
+    }
+}
+
+fn is_file(path: &str) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) => metadata.is_file(),
+        Err(_) => false,
+    }
+}
+
+fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
+{
+    let s = storage.loggedInAccountMap.read().clone();
+    return s.contains_key(encEnvPath)
+}
+
 
 fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str //TODO replace: modularize from accounts found on refresh
 {
@@ -61,6 +130,193 @@ fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str //T
     }
 }
 
+fn load_local_swap_state_map() -> SingleNestMap
+{
+    let filename = "SwapStateMap";
+    if is_file(filename)
+    {
+        let contents = fs::read_to_string(filename).expect("cant read SwapStateMap");
+        let map: SingleNestMap = serde_json::from_str(&contents).expect("cant parse SwapStateMap into serde_json object");
+        return map
+    }
+    else
+    {
+        let mut file = File::create(filename.clone()).unwrap();
+        let data = "{}";
+        file.write_all(data.as_bytes()).unwrap() ;
+        let contents = fs::read_to_string(filename).expect("cant read SwapStateMap");
+        let map: SingleNestMap = serde_json::from_str(&contents).expect("cant parse SwapStateMap into serde_json object");
+        return map
+
+    }
+}
+
+fn update_local_swap_state_map(jsonmapdata: SingleNestMap)
+{
+    let swapStateMapString = serde_json::to_string_pretty(&jsonmapdata).unwrap();
+    fs::write("SwapStateMap", swapStateMapString).expect("Unable to write file");
+}
+
+fn check_swap_state_map_against_swap_dirs(mut map: SingleNestMap) -> SingleNestMap
+{
+    let current_dir = Path::new(".");
+    let mut uuid_dirs = vec![];
+    let mut swapstatemap = HashMap::<String, String>::new();
+    if let Ok(subdirs) = fs::read_dir(current_dir)
+    {
+        for subdir in subdirs
+        {
+            if let Ok(subdir) = subdir
+            {
+                let file_name = subdir.file_name().to_string_lossy().into_owned();
+                if let Some(name) = Some(file_name.clone())
+                {
+                    if let Ok(uuid) = Uuid::parse_str(&name.clone())
+                    {
+                        dbg!(&name.clone());
+                        uuid_dirs.push(name.clone());
+                        /*if uuid.get_version() == Some(uuid::Version::Md5) //this check for
+                         * specific version doesnt currently work but is possible
+                        {
+                        }*/
+                    }
+                }
+            }
+        }
+    };
+    if uuid_dirs.is_empty()
+    {
+        if !map.is_empty()
+        {
+            map.clear();
+        }
+    }
+    for dir in &uuid_dirs
+    {
+        if !map.contains_key(&dir.to_string())
+        {
+            let mut swapDataMap = StringStringMap::new();
+        //    swapDataMap.insert("OrderTypeUUID".to_string(), request.OrderTypeUUID.clone().unwrap().replace("\\", "").replace("\"", ""));
+        //    TODO add OrderTypeUUID to responder.json so we can add it in this instance\
+            let init_J_filename = dir.clone().to_string() + "/initiator.json";
+
+            if is_file(&init_J_filename)
+            {
+                let init_J: Value = serde_json::from_str(&fs::read_to_string(init_J_filename).expect("initiator json not found")).unwrap();
+                let ElGamalKeyPath = init_J.get("ElGamalKeyPath").unwrap().to_string().replace("\\", "").replace("\"", "");
+                dbg!(&ElGamalKeyPath);
+                let ElGObj: Value = serde_json::from_str(&fs::read_to_string(ElGamalKeyPath).unwrap()).unwrap();
+                let QGChannel = ElGObj.get("q").unwrap().to_string().replace("\\", "").replace("\"", "") + "," + &ElGObj.get("g").unwrap().to_string().replace("\\", "").replace("\"", "");
+                swapDataMap.insert("QGChannel".to_string(), QGChannel);
+                swapDataMap.insert("ElGamalKey".to_string(), ElGObj.get("Public Key").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("ClientElGamalKey".to_string(), init_J.get("ElGamalKey").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("ElGamalKeyPath".to_string(), init_J.get("ElGamalKeyPath").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("LocalChain".to_string(), init_J.get("LocalChain").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("CrossChain".to_string(), init_J.get("CrossChain").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("SwapRole".to_string(), init_J.get("SwapRole").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("SwapAmount".to_string(), init_J.get("SwapAmount").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("LocalChainAccount".to_string(), init_J.get("LocalChainAccount").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                swapDataMap.insert("CrossChainAccount".to_string(), init_J.get("CrossChainAccount").unwrap().to_string().replace("\\", "").replace("\"", ""));
+                map.insert(dir.to_string(), swapDataMap);
+            }
+        }
+    }
+    for swap in map.clone().keys()
+    {
+        if !uuid_dirs.contains(&swap)
+        {
+            map.remove(&swap.clone()); //remove swaps that cant be found locally
+        }
+    }
+    return map
+}
+
+
+
+async fn restore_state(mut storage: Storage)
+{
+    let mut loaded_swap_state_map = check_swap_state_map_against_swap_dirs(load_local_swap_state_map());
+    storage.update_swap_state_map(loaded_swap_state_map.clone());
+    for swap in storage.swapStateMap.read().clone().keys()
+    {
+        let mut localChainAccountPassword = String::new();
+        let mut crossChainAccountPassword = String::new();
+        let swapDataMap = storage.swapStateMap.read()[&swap.clone()].clone();
+        let mut properlyLoggedIn = false;
+        if swapDataMap["LocalChain"] == "TestnetErgo" && swapDataMap["CrossChain"] == "Sepolia"
+        {
+            let ErgoAccountName = &swapDataMap["LocalChainAccount"];
+            let ergchainFrameworkPath = "Ergo/SigmaParticle/";
+            let ergencEnvPath = ergchainFrameworkPath.to_owned() + &ErgoAccountName.clone() + "/.env.encrypted";
+            let ergoencenvexists = if let Ok(_) = fs::metadata(ergencEnvPath.clone()) {
+                true
+            } else {
+                false
+            };
+            let mut ErgoAccountPassword = String::new();
+            let SepoliaAccountName =  &swapDataMap["CrossChainAccount"];
+            let sepoliachainFrameworkPath = "EVM/Atomicity/";
+            let sepoliaencEnvPath = sepoliachainFrameworkPath.to_owned() + &SepoliaAccountName.clone() + "/.env.encrypted";
+            let sepoliaencenvexists = if let Ok(_) = fs::metadata(sepoliaencEnvPath.clone()) {
+                true
+            } else {
+                false
+            };
+            let mut SepoliaAccountPassword = String::new();
+            if ergoencenvexists && sepoliaencenvexists
+            {
+                if checkAccountLoggedInStatus(&ergencEnvPath, storage.clone()) == true
+                {
+                    localChainAccountPassword = storage.loggedInAccountMap.read()[&ergencEnvPath].clone();
+                }
+                else
+                {
+                    let errstr =  "TestnetErgo ".to_owned() +  &ErgoAccountName + " is not logged in!";
+                    dbg!(&errstr);
+                }
+                if checkAccountLoggedInStatus(&sepoliaencEnvPath, storage.clone()) == true
+                {
+                    crossChainAccountPassword = storage.loggedInAccountMap.read()[&sepoliaencEnvPath].clone();
+                }
+                else
+                {
+                    let errstr =  "Sepolia ".to_owned() +  &SepoliaAccountName + " is not logged in!";
+                    dbg!(&errstr);
+                }
+                if checkAccountLoggedInStatus(&sepoliaencEnvPath, storage.clone()) == true && checkAccountLoggedInStatus(&ergencEnvPath, storage.clone()) == true
+                {
+                    properlyLoggedIn = true;
+                }
+            }
+            else
+            {
+                //TODO handle cases where one acc is encrypted and another is not
+                properlyLoggedIn = true;
+            }
+        }
+        if properlyLoggedIn == true
+        {
+            dbg!("reloading swap: ".to_string() +  &swap);
+            let mut pipe = Popen::create(&[
+                "python3",  "-u", "main.py", "watchSwapLoop", &swap,
+                &localChainAccountPassword, &crossChainAccountPassword,
+            ], PopenConfig{
+                detached: true,
+                stdout: Redirection::Pipe,
+                ..Default::default()
+            }).expect("err");
+            let (out, err) = pipe.communicate(None).expect("err");
+            if let Some(exit_status) = pipe.poll()
+            {
+                println!("Out: {:?}, Err: {:?}", out, err)
+            }
+            else
+            {
+                pipe.terminate().expect("err");
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -76,8 +332,9 @@ async fn main() {
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec!["Content-Type", "Authorization"]);
-    let storage = Storage::new();
-    let storage_filter = warp::any().map(move || storage.clone());
+    let mut storage = Storage::new();
+    let sc = storage.clone();
+    let storage_filter = warp::any().map(move || sc.clone());
     let bearer_public_api_key_filter = warp::header::<String>("Authorization").and_then( | auth_header: String | async move {
             if auth_header.starts_with("Bearer ")
             {
@@ -116,6 +373,10 @@ async fn main() {
                 Err(warp::reject::custom(Noapikey))
             }
     });
+    let mut loaded_swap_state_map = check_swap_state_map_against_swap_dirs(load_local_swap_state_map());
+    storage.update_swap_state_map(loaded_swap_state_map.clone());
+    update_local_swap_state_map(loaded_swap_state_map);
+    restore_state(storage.clone()).await;
     //add and update use the same function just differ in post and put
     let add_requests = warp::post()
         .and(warp::path(version))
@@ -314,6 +575,15 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                                                       //future impl: swapname is sha256 of the
                                                       //public initiation (ensures uniqueness)
 //            dbg!(&swapName);
+//
+//
+            let mut swapDataMap: HashMap<String, String> = HashMap::new();
+            swapDataMap.insert("SwapRole".to_string(), "Initiator".to_string());
+            swapDataMap.insert("OrderTypeUUID".to_string(), request.OrderTypeUUID.clone().unwrap().replace("\\", "").replace("\"", ""));
+            swapDataMap.insert("QGChannel".to_string(), request.QGChannel.clone().unwrap().replace("\\", "").replace("\"", ""));
+            swapDataMap.insert("ClientElGamalKey".to_string(), request.ElGamalKey.clone().unwrap().replace("\\", "").replace("\"", ""));
+
+
             let QGPubkeyArrayFilepath = "QGPubkeyArray.json";
             let mut  QGPubkeyArrayFile = File::open(QGPubkeyArrayFilepath).expect("cant open file");
             let mut QGPubkeyArray =  String::new();
@@ -324,7 +594,8 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             let mut ElGKeyIndex = String::new();
             if let Some((key, _)) = QGPubkeyArrayMap.iter().find(|(_, &ref v)| *v == *&QGPubkeyArrayMap[&QGCandidate])
             {
-                let CompatPubkey = &QGPubkeyArrayMap[&QGCandidate];
+                CompatPubkey = (&QGPubkeyArrayMap[&QGCandidate]).to_string();
+                let compatpubkeystr = &QGPubkeyArrayMap[&QGCandidate];
                 println!("match: qg: {}, pubkey: {}", key, CompatPubkey);
                 //if we get here we have a compatible pubkey and Q already
                 //load key index map
@@ -333,7 +604,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 let mut ElGKeyIndexMapString = String::new();
                 ElGKeyIndexMapFile.read_to_string(&mut ElGKeyIndexMapString).expect("cant read file");
                 let ElGKeyIndexMap : HashMap<String, Value> = serde_json::from_str(&ElGKeyIndexMapString).expect("Failed to parse JSON");
-                if  let Some((key, _)) = ElGKeyIndexMap.iter().find(|(_, &ref v)| v == CompatPubkey)
+                if  let Some((key, _)) = ElGKeyIndexMap.iter().find(|(_, &ref v)| v == compatpubkeystr)
                 {
                    ElGKeyIndex = key.to_string();
                 }
@@ -348,8 +619,9 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 println!("Unhandled: New Q Value Suggested by Client");
             }
             //MAJOR TODO TODO:!!!!make sure to save chosen pubkey and channel into swap folder!!!TODO TODO
-
+            swapDataMap.insert("ElGamalKey".to_string(), CompatPubkey.clone().replace("\\", "").replace("\"", ""));
             let ElGamalKeyPath = "Key".to_owned() + &ElGKeyIndex + ".ElGamalKey"; 
+            swapDataMap.insert("ElGamalKeyPath".to_string(), ElGamalKeyPath.clone());
 
 
             let filepath = "OrderTypes.json";
@@ -363,9 +635,24 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             let CrossChainAccountName = accountNameFromChainAndIndex(
                 rem_first_and_last(&OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string()).to_string(), 0);
             let ElGamalKey = request.ElGamalKey.unwrap(); //key sent by client 
-            let InitiatorChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string().replace("\"", "");;
-            let ResponderChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string().replace("\"", "");;
+            let InitiatorChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinA"].to_string().replace("\"", "");
+            let ResponderChain = OrdertypesMap[&request.OrderTypeUUID.clone().unwrap()]["CoinB"].to_string().replace("\"", "");
             
+            swapDataMap.insert(
+                "LocalChainAccount".to_string(),
+                LocalChainAccountName.to_string().clone()
+            );
+            swapDataMap.insert(
+                "CrossChainAccount".to_string(),
+                CrossChainAccountName.to_string().clone()
+            );
+            swapDataMap.insert("LocalChain".to_string(), InitiatorChain.clone());
+            swapDataMap.insert("CrossChain".to_string(), ResponderChain.clone());
+            swapDataMap.insert("SwapState".to_string(), "initiating".to_string());
+            storage.swapStateMap.write().insert(swapName.clone().to_string(), swapDataMap.clone());
+//            let swapStateMapString = format!("{:#?}", &*storage.swapStateMap.read());
+            let swapStateMapString = serde_json::to_string_pretty(&*storage.swapStateMap.read()).unwrap();
+            fs::write("SwapStateMap", swapStateMapString).expect("Unable to write file");
             //define order types by UUID
             //on servers end privately apply swap order information coinA / price coinB / price 
             //max volume of coin A, users can publically request this data, then when they submit a
@@ -444,6 +731,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
                     &InitiatorChain + " " + &ResponderChain;
                 //println!("{}", command);
+                dbg!("python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
+                    &swapName.clone(), LocalChainAccountName,
+                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &InitiatorChain, &ResponderChain);
                 let mut pipe = Popen::create(&[
                     "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
                     &swapName.clone(), LocalChainAccountName, 
@@ -473,9 +764,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                         "SwapTicketID":  swapName.clone(),
                         "ENC_init.bin": contents
                     });
+                set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
             }
-            else if localChainAccountPassword != String::new() && crossChainAccountPassword != String::new()
+            else 
             {
                 let mut pipe = Popen::create(&[
                     "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
@@ -507,6 +799,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                         "SwapTicketID":  swapName.clone(),
                         "ENC_init.bin": contents
                     });
+                set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
             }
         }
@@ -767,6 +1060,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                 });
             }
+            set_swap_state(&request.SwapTicketID.clone().unwrap(), "finalized_submitted");
             return (status, Some(contents.to_string()))
         }
     }
@@ -930,23 +1224,35 @@ pub struct Request {
 }
 
 type StringStringMap = HashMap<String, String>;
+type SingleNestMap = HashMap<String, HashMap<String, String>>;
 
 #[derive(Clone)]
 pub struct Storage {
    request_map: Arc<RwLock<StringStringMap>>,
-   loggedInAccountMap: Arc<RwLock<StringStringMap>>
+   loggedInAccountMap: Arc<RwLock<StringStringMap>>,
+   swapStateMap: Arc<RwLock<SingleNestMap>>
 }
 
 impl Storage {
-    fn contains_key(&self, key: &str) -> bool{
+    fn loggedInAccountMap_contains_key(&self, key: &str) -> bool{
         self.loggedInAccountMap.read().contains_key(key)
     }
 
     fn new() -> Self {
         Storage {
             request_map: Arc::new(RwLock::new(HashMap::new())),
-            loggedInAccountMap: Arc::new(RwLock::new(HashMap::new()))
+            loggedInAccountMap: Arc::new(RwLock::new(HashMap::new())),
+            swapStateMap: Arc::new(RwLock::new(HashMap::new()))
         }
     }
+
+    fn update_swap_state_map(&mut self, loaded_map: SingleNestMap) -> Result<(), Box<dyn std::error::Error>> {
+        // Replace the swapStateMap
+//        let mut swap_state_map = self.swapStateMap.write();
+//        *swap_state_map = loaded_map;
+        *self.swapStateMap.write() = loaded_map;
+        Ok(())
+    }
+
 }
 
