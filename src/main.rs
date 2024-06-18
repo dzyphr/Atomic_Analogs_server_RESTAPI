@@ -78,29 +78,85 @@ fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
     return s.contains_key(encEnvPath)
 }
 
-
-fn accountNameFromChainAndIndex(chain: String, index: usize) -> &'static str //TODO replace: modularize from accounts found on refresh
+fn get_testnet_ergo_accounts() -> Vec<String>
 {
-    if chain == "TestnetErgo"
-    {
-        let accountvec = vec![
-            "basic_framework"
-        ];
-        return accountvec[index]
+    let testnetErgoFrameworkPathStr = "Ergo/SigmaParticle/";
+    let testnetErgoFrameworkPath = Path::new(testnetErgoFrameworkPathStr);
+    let expected_dirs = vec![
+            "AtomicMultiSig", "AtomicMultiSigECC", "basic_framework", "boxFilter", "boxValue",
+            "cpp", "getTreeFromBox", "treeToAddr", "boxConstantByIndex",
+            "boxToContract", "currentHeight", "currentHeight", "valFromHex", "testaccountname", "SwapKeyManager"
+    ];
+    let mut accounts = vec![];
+    if testnetErgoFrameworkPath.is_dir() {
+        for entry in fs::read_dir(testnetErgoFrameworkPath).expect("failed to read dir entry") {
+            let entry = entry.expect("error getting entry");
+            let path = entry.path();
+            if path.is_dir()
+            {
+                let path_str = path.to_str().unwrap_or("").to_string();
+                let pathref = &path.to_str();
+                if let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) {
+                    if !expected_dirs.contains(&dir_name) {
+                        if Uuid::parse_str(&path_str).is_err() {
+                            let accountName = path_str.clone().replace(testnetErgoFrameworkPathStr, "");
+                            accounts.push(accountName.clone());
+                            dbg!(&accountName);
+                        }
+                    }
+                }
+            }
+        }
     }
-    if chain == "Sepolia"
-    {
-        let accountvec = vec![
-            "p2ENV"
-        ];
-        return accountvec[index]
-    }
-    else
-    {
-        return "chain not found"
-    }
+    return accounts
+    //go through the framework dir
+    //find any outlier dir that isnt a uuid swap dir
 }
 
+fn get_sepolia_accounts() -> Vec<String>
+{
+    let Sepolia_framework_path_str = "EVM/Atomicity/";
+    let Sepolia_framework_path = Path::new(Sepolia_framework_path_str);
+    let expected_dirs = vec![
+        "AtomicMultiSigSecp256k1", "AtomicMultiSigSecp256k1_0.0.1", "basic_framework",
+        "cpp", "Goerli", "Sepolia", "solidity-flattener", "testaccountname"
+    ];
+    let mut accounts = vec![];
+    for entry in fs::read_dir(Sepolia_framework_path).expect("failed to read dir entry")
+    {
+        let entry = entry.expect("error getting entry");
+        let path = entry.path();
+        if path.is_dir()
+        {
+            let path_str = path.to_str().unwrap_or("").to_string();
+            let pathref = &path.to_str();
+            if let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) {
+                if !expected_dirs.contains(&dir_name) {
+                    if !dir_name.starts_with("Swap_") {
+                        let accountName = path_str.clone().replace(Sepolia_framework_path_str, "");
+                        accounts.push(accountName.clone());
+                        dbg!(&accountName);
+                    }
+                }
+            }
+        }
+    }
+    return accounts
+}
+
+fn accountNameFromChainAndIndex(chain: String, index: usize) -> String {
+    let TestnetErgo: String = "TestnetErgo".to_string();
+    let Sepolia: String = "Sepolia".to_string();
+    match &chain {
+        TestnetErgo => {
+            return get_testnet_ergo_accounts()[index].clone();
+        }
+        Sepolia => {
+            return get_sepolia_accounts()[index].clone();
+        }
+        _ => "chain not found".to_string(),
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -463,7 +519,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             if InitiatorChain == "TestnetErgo"
             {
                 let chainFrameworkPath = "Ergo/SigmaParticle/";
-                let encEnvPath = chainFrameworkPath.to_owned() + LocalChainAccountName + "/.env.encrypted";
+                let encEnvPath = chainFrameworkPath.to_owned() + &LocalChainAccountName + "/.env.encrypted";
                 dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
@@ -487,7 +543,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             if ResponderChain == "Sepolia"
             {
                 let chainFrameworkPath = "EVM/Atomicity/";
-                let encEnvPath = chainFrameworkPath.to_owned() + CrossChainAccountName + "/.env.encrypted";
+                let encEnvPath = chainFrameworkPath.to_owned() + &CrossChainAccountName + "/.env.encrypted";
                 dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
@@ -511,18 +567,18 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
                 let command = "python3 ".to_owned()+  "-u "+ "main.py " + "GeneralizedENCInitiationSubroutine " +
-                    &swapName.clone() + " " + LocalChainAccountName + " " +
-                    CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
+                    &swapName.clone() + " " + &LocalChainAccountName + " " +
+                    &CrossChainAccountName + " " + &ElGamalKey + " " + &ElGamalKeyPath + " " + 
                     &InitiatorChain + " " + &ResponderChain;
                 //println!("{}", command);
                 dbg!("python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
-                    &swapName.clone(), LocalChainAccountName,
-                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &swapName.clone(), &LocalChainAccountName,
+                    &CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
                     &InitiatorChain, &ResponderChain);
                 let mut pipe = Popen::create(&[
                     "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
-                    &swapName.clone(), LocalChainAccountName, 
-                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &swapName.clone(), &LocalChainAccountName, 
+                    &CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
                     &InitiatorChain, &ResponderChain
                 ], PopenConfig{
                     stdout: Redirection::Pipe, ..Default::default()}).expect("err");
@@ -555,8 +611,8 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             {
                 let mut pipe = Popen::create(&[
                     "python3",  "-u", "main.py", "GeneralizedENCInitiationSubroutine",
-                    &swapName.clone(), LocalChainAccountName,
-                    CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
+                    &swapName.clone(), &LocalChainAccountName,
+                    &CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
                     &InitiatorChain, &ResponderChain,
                     &localChainAccountPassword, &crossChainAccountPassword
                 ], PopenConfig{
@@ -652,7 +708,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             if InitiatorChain == "TestnetErgo"
             {
                 let chainFrameworkPath = "Ergo/SigmaParticle/";
-                let encEnvPath = chainFrameworkPath.to_owned() + LocalChainAccountName + "/.env.encrypted";
+                let encEnvPath = chainFrameworkPath.to_owned() + &LocalChainAccountName + "/.env.encrypted";
                 dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
@@ -676,7 +732,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             if ResponderChain == "Sepolia"
             {
                 let chainFrameworkPath = "EVM/Atomicity/";
-                let encEnvPath = chainFrameworkPath.to_owned() + CrossChainAccountName + "/.env.encrypted";
+                let encEnvPath = chainFrameworkPath.to_owned() + &CrossChainAccountName + "/.env.encrypted";
                 dbg!(&encEnvPath);
                 let exists = if let Ok(_) = fs::metadata(encEnvPath.clone()) {
                     true
