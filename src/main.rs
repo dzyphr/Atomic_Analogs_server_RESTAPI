@@ -1,4 +1,7 @@
 use std::path::Path;
+use tokio::{task};
+use tokio::io::AsyncReadExt;
+use futures::{Future, future};
 use warp::Filter;
 use warp::http::Response;
 use warp::hyper::header::HeaderValue;
@@ -20,7 +23,7 @@ use warp::Reply;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use subprocess::{PopenConfig, Popen, Redirection};
 mod json_fns;
@@ -72,6 +75,21 @@ fn is_file(path: &str) -> bool {
     }
 }
 
+
+fn check_if_uuid_fmt(input: &str) -> bool
+{
+    let regex = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+    if regex.is_match(input) == true
+    {
+        return true //is formatted like uuid
+    }
+    else
+    {
+        return false //is not formatted like uuid
+    }
+}
+
+
 fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
 {
     let s = storage.loggedInAccountMap.read().clone();
@@ -99,9 +117,12 @@ fn get_testnet_ergo_accounts() -> Vec<String>
                 if let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) {
                     if !expected_dirs.contains(&dir_name) {
                         if Uuid::parse_str(&path_str).is_err() {
-                            let accountName = path_str.clone().replace(testnetErgoFrameworkPathStr, "");
-                            accounts.push(accountName.clone());
-                            dbg!(&accountName);
+                            if check_if_uuid_fmt(&path_str) == false
+                            {
+                                let accountName = path_str.clone().replace(testnetErgoFrameworkPathStr, "");
+                                accounts.push(accountName.clone());
+                                dbg!(&accountName);
+                            }
                         }
                     }
                 }
@@ -351,12 +372,15 @@ async fn main() {
         add_requests.or(get_requests).or(update_request).or(private_delete_request)
         .or(public_ordertypes_get_request).or(public_add_requests)
         .or(get_ElGamalPubs).or(get_ElGamalQGChannels).or(get_QGPubkeyArray).or(get_starterAPIKeys);
+    tokio::spawn(async move{
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
+    }).await.unwrap();
 }
 
-fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
+
+async fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
 {
     let mut output = "";
     let mut status = false;
@@ -639,7 +663,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &CrossChainAccountName, &ElGamalKey, &ElGamalKeyPath,
                     &InitiatorChain, &ResponderChain
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    //detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -649,18 +676,19 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 {
                     pipe.terminate().expect("err");
                 }
+                let OrderTypeUUID = request.OrderTypeUUID.clone().unwrap();
                 let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
                 let mut buf_reader = BufReader::new(file);
-                let mut contents = String::new();
+                let mut buffer = String::new();
+                buf_reader.read_to_string(&mut buffer).expect("cannot read file");
                 let mut filepath = swapName.clone() + "/OrderTypeUUID";
                 let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
-                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.write_all(&OrderTypeUUID.clone().as_bytes());
                 f.flush().expect("error flushing");
-                buf_reader.read_to_string(&mut contents).expect("cannot read file");
                 let mut outputjson =
                     json!({
                         "SwapTicketID":  swapName.clone(),
-                        "ENC_init.bin": contents
+                        "ENC_init.bin": buffer
                     });
                 set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
@@ -674,7 +702,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &InitiatorChain, &ResponderChain,
                     &localChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    //detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -684,18 +715,19 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 {
                     pipe.terminate().expect("err");
                 }
+                let OrderTypeUUID = request.OrderTypeUUID.clone().unwrap();
                 let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
                 let mut buf_reader = BufReader::new(file);
-                let mut contents = String::new();
+                let mut buffer = String::new();
+                buf_reader.read_to_string(&mut buffer).expect("cannot read file");
                 let mut filepath = swapName.clone() + "/OrderTypeUUID";
                 let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
-                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.write_all(&OrderTypeUUID.clone().as_bytes());
                 f.flush().expect("error flushing");
-                buf_reader.read_to_string(&mut contents).expect("cannot read file");
                 let mut outputjson =
                     json!({
                         "SwapTicketID":  swapName.clone(),
-                        "ENC_init.bin": contents
+                        "ENC_init.bin": buffer
                     });
                 set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
@@ -709,7 +741,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &InitiatorChain, &ResponderChain,
                     &crossChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    //detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -719,18 +754,19 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 {
                     pipe.terminate().expect("err");
                 }
+                let OrderTypeUUID = request.OrderTypeUUID.clone().unwrap();
                 let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
                 let mut buf_reader = BufReader::new(file);
-                let mut contents = String::new();
+                let mut buffer = String::new();
+                buf_reader.read_to_string(&mut buffer).expect("cannot read file");
                 let mut filepath = swapName.clone() + "/OrderTypeUUID";
                 let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
-                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.write_all(&OrderTypeUUID.clone().as_bytes());
                 f.flush().expect("error flushing");
-                buf_reader.read_to_string(&mut contents).expect("cannot read file");
                 let mut outputjson =
                     json!({
                         "SwapTicketID":  swapName.clone(),
-                        "ENC_init.bin": contents
+                        "ENC_init.bin": buffer
                     });
                 set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
@@ -744,7 +780,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &InitiatorChain, &ResponderChain,
                     &localChainAccountPassword, &crossChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    //detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -754,18 +793,19 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 {
                     pipe.terminate().expect("err");
                 }
+                let OrderTypeUUID = request.OrderTypeUUID.clone().unwrap();
                 let mut file = File::open(swapName.clone() + "/ENC_init.bin").expect("file not found");
                 let mut buf_reader = BufReader::new(file);
-                let mut contents = String::new();
+                let mut buffer = String::new();
+                buf_reader.read_to_string(&mut buffer).expect("cannot read file");
                 let mut filepath = swapName.clone() + "/OrderTypeUUID";
                 let mut f = std::fs::OpenOptions::new().create_new(true).write(true).truncate(true).open(filepath).expect("cant open file");
-                f.write_all(&request.OrderTypeUUID.clone().unwrap().as_bytes());
+                f.write_all(&OrderTypeUUID.clone().as_bytes());
                 f.flush().expect("error flushing");
-                buf_reader.read_to_string(&mut contents).expect("cannot read file");
                 let mut outputjson =
                     json!({
                         "SwapTicketID":  swapName.clone(),
-                        "ENC_init.bin": contents
+                        "ENC_init.bin": buffer
                     });
                 set_swap_state(&swapName.clone(), "initiated_submitted");
                 return (status, Some(outputjson.to_string()))
@@ -811,9 +851,9 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             let mut file = File::open(filepath).expect("cant open file");
             let mut OrderTypes = String::new();
             file.read_to_string(&mut OrderTypes).expect("cant read file");
-            let OrderTypeMap: HashMap<String, Value> = serde_json::from_str(&OrderTypes).expect("Failed to parse JSON");
-            let CoinA_Price = &OrderTypeMap[&OrderTypeUUID]["CoinA_price"];
-            let CoinB_Price = &OrderTypeMap[&OrderTypeUUID]["CoinB_price"];
+            let OrderTypeMap: HashMap<String, Value> = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON").clone();
+            let CoinA_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinA_price"].clone();
+            let CoinB_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinB_price"].clone();
             dbg!(CoinA_Price, CoinB_Price);
             fn checkAccountLoggedInStatus(encEnvPath: &str, storage: Storage) -> bool
             {
@@ -821,8 +861,8 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                 return s.contains_key(encEnvPath)
             }
 
-            let InitiatorChain = OrderTypeMap[&OrderTypeUUID.clone()]["CoinA"].to_string().replace("\"", "");
-            let ResponderChain = OrderTypeMap[&OrderTypeUUID.clone()]["CoinB"].to_string().replace("\"", "");
+            let InitiatorChain = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID.clone()]["CoinA"].clone().to_string().replace("\"", "").clone();
+            let ResponderChain = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID.clone()]["CoinB"].clone().to_string().replace("\"", "").clone();
             let LocalChainAccountName = accountNameFromChainAndIndex(
                 rem_first_and_last(&OrderTypeMap[&OrderTypeUUID.clone()]["CoinA"].to_string()), 0);
             let CrossChainAccountName = accountNameFromChainAndIndex(
@@ -881,6 +921,9 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                 }
             }
+            return task::spawn_blocking( move || {
+            let CoinA_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinA_price"].clone();
+            let CoinB_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinB_price"].clone(); 
             if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
                 let mut pipe = Popen::create(&[
@@ -888,7 +931,11 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
                     &CoinA_Price.to_string(), &CoinB_Price.to_string()
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
+                
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -907,7 +954,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &CoinA_Price.to_string(), &CoinB_Price.to_string(),
                     &crossChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -926,7 +976,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &CoinA_Price.to_string(), &CoinB_Price.to_string(),
                     &localChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -945,7 +998,10 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     &CoinA_Price.to_string(), &CoinB_Price.to_string(), 
                     &localChainAccountPassword, &crossChainAccountPassword
                 ], PopenConfig{
-                    stdout: Redirection::Pipe, ..Default::default()}).expect("err");
+                    detached: true,
+                    stdout: Redirection::Pipe,
+                    ..Default::default()
+                }).expect("err");
                 let (out, err) = pipe.communicate(None).expect("err");
                 if let Some(exit_status) = pipe.poll()
                 {
@@ -956,10 +1012,6 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     pipe.terminate().expect("err");
                 }
             }
-            let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
-            let mut file = File::open(filepath).expect("cant open file");
-            let mut contents = String::new();
-            file.read_to_string(&mut contents).expect("cant read file");
             let child_thread = thread::spawn(move|| {
                 if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
                 {
@@ -996,13 +1048,13 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                     let exit_status = child_process.wait().expect("Failed to wait for subprocess");
                     if exit_status.success() {
-                        println!("Subprocess output:\n{}", output);
+                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
                     } else {
                         eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                         eprintln!("Subprocess error output:\n{}", error_output);
                     }
                 }
-                if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
+                else if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
                 {
                     let mut child_process =
                         Command::new("python3")
@@ -1038,13 +1090,13 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                     let exit_status = child_process.wait().expect("Failed to wait for subprocess");
                     if exit_status.success() {
-                        println!("Subprocess output:\n{}", output);
+                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
                     } else {
                         eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                         eprintln!("Subprocess error output:\n{}", error_output);
                     }
                 }
-                if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
+                else if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
                 {
                     let mut child_process =
                         Command::new("python3")
@@ -1080,7 +1132,7 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                     let exit_status = child_process.wait().expect("Failed to wait for subprocess");
                     if exit_status.success() {
-                        println!("Subprocess output:\n{}", output);
+                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
                     } else {
                         eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                         eprintln!("Subprocess error output:\n{}", error_output);
@@ -1124,15 +1176,20 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
                     }
                     let exit_status = child_process.wait().expect("Failed to wait for subprocess");
                     if exit_status.success() {
-                        println!("Subprocess output:\n{}", output);
+                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
                     } else {
                         eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                         eprintln!("Subprocess error output:\n{}", error_output);
                     }
                 }
             });
-            set_swap_state(&request.SwapTicketID.clone().unwrap(), "finalized_submitted");
-            return (status, Some(contents.to_string()))
+                let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
+                let mut buffer = String::new(); // filecontents
+                let mut file = fs::File::open(filepath.clone()).unwrap();
+                file.read_to_string(&mut buffer).unwrap();
+                set_swap_state(&request.SwapTicketID.clone().unwrap(), "finalized_submitted");
+                return (status, Some(buffer.to_string()))
+            }).await.unwrap()
         }
     }
     if request.request_type == "logInToPasswordEncryptedAccount"
@@ -1189,55 +1246,6 @@ fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
             return (status, Some(out.expect("not string").to_string().replace("\n", "")))
         }
     }
-    //instead of private finalize swap endpoint first accept public postresponse endpoint that
-    //checks the value of the coins in the response contract and finalizes based on a pricing
-    //algorithm, private calls after generateSwapInitiator would likely only be used in recovery
-    //scenarios. this leverages automating checking for swap finalization or refunding on the
-    //clients side and automating the initiators check that the responder has claimed so he can
-    //claim or else he can refund
-    /*
-    if request.request_type == "finalizeSwap" //finalize a specific swap 
-    {
-        if request.InitiatorJSONPath == None
-        {
-            let output = &(output.to_owned() + "InitiatorJSONPath variable is required!");
-            return (status, Some(output.to_string()));
-        }
-        else
-        {
-            let status = true;
-            /call Atomic API here
-            return (status, None)
-        }
-    }
-    if request.request_type == "claimSwapFunds" //claim funds from a finalized and accepted completed swap
-    {
-        if request.InitiatorJSONPath == None
-        {
-            let output = &(output.to_owned() + "InitiatorJSONPath variable is required!");
-            return (status, Some(output.to_string()));
-        }
-        else
-        {
-            let status = true;
-            //call Atomic API here
-            return (status, None)
-        }
-    }
-    if request.request_type == "refundSwap" //refund the coins from an unclaimed or unfinalized swap
-    {
-        if request.InitiatorJSONPath == None
-        {
-            let output = &(output.to_owned() + "InitiatorJSONPath variable is required!");
-            return (status, Some(output.to_string()));
-        }
-        else
-        {
-            let status = true;
-            //call Atomic API here
-            return (status, None)
-        }
-    }*/
     else
     {
         return  (status, Some("Unknown Error".to_string()));

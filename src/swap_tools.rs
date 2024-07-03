@@ -195,14 +195,14 @@ pub async fn restore_state(mut storage: Storage)
             }
         }
         if properlyLoggedIn == true
-        {
+        { //TODO crossENCOnly and localENCOnly implementations
             dbg!("reloading swap: ".to_string() +  &swap);
             let mut pipe = Popen::create(&[
                 "python3",  "-u", "main.py", "watchSwapLoop", &swap,
                 &localChainAccountPassword, &crossChainAccountPassword,
             ], PopenConfig{
                 detached: true,
-                stdout: Redirection::Pipe,
+//                stdout: Redirection::Pipe,
                 ..Default::default()
             }).expect("err");
             let (out, err) = pipe.communicate(None).expect("err");
