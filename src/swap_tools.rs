@@ -1,4 +1,4 @@
-use crate::{HashMap, fs, SingleNestMap, insert_into_nested_map, is_directory, File, is_file, Write, StringStringMap, Uuid, Path, Value, Storage, checkAccountLoggedInStatus, Popen, PopenConfig, Redirection};
+use crate::{HashMap, fs, SingleNestMap, insert_into_nested_map, is_directory, File, is_file, Write, StringStringMap, Uuid, Path, Value, Storage, checkAccountLoggedInStatus, Popen, PopenConfig, Redirection, libc, Command, CommandExt};
 
 pub fn set_swap_state(swapName: &str, state: &str) -> bool
 {
@@ -183,36 +183,91 @@ pub async fn restore_state(mut storage: Storage)
                     let errstr =  "Sepolia ".to_owned() +  &SepoliaAccountName + " is not logged in!";
                     dbg!(&errstr);
                 }
-                if checkAccountLoggedInStatus(&sepoliaencEnvPath, storage.clone()) == true && checkAccountLoggedInStatus(&ergencEnvPath, storage.clone()) == true
+                if checkAccountLoggedInStatus(&sepoliaencEnvPath, storage.clone()) == true 
+                    && checkAccountLoggedInStatus(&ergencEnvPath, storage.clone()) == true
                 {
-                    properlyLoggedIn = true;
+                    let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("watchSwapLoop")
+                    .arg(&swap)
+                    .arg(&localChainAccountPassword)
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                }
+
+            }
+            if ergoencenvexists && !sepoliaencenvexists
+            {
+                if checkAccountLoggedInStatus(&ergencEnvPath, storage.clone()) == true
+                {
+                    localChainAccountPassword = storage.loggedInAccountMap.read()[&ergencEnvPath].clone();
+                    let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("watchSwapLoop_localEncOnly")
+                    .arg(&swap)
+                    .arg(&localChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                }
+                else
+                {
+                    let errstr =  "TestnetErgo ".to_owned() +  &ErgoAccountName + " is not logged in!";
+                    dbg!(&errstr);
                 }
             }
+            if !ergoencenvexists && sepoliaencenvexists
+            {
+                if checkAccountLoggedInStatus(&sepoliaencEnvPath, storage.clone()) == true
+                {
+                    crossChainAccountPassword = storage.loggedInAccountMap.read()[&sepoliaencEnvPath].clone();
+                    let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("watchSwapLoop_crossEncOnly")
+                    .arg(&swap)
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                }
+                else
+                {
+                    let errstr =  "Sepolia ".to_owned() +  &SepoliaAccountName + " is not logged in!";
+                    dbg!(&errstr);
+                }
+
+            }
             else
             {
-                //TODO handle cases where one acc is encrypted and another is not
-                properlyLoggedIn = true;
-            }
-        }
-        if properlyLoggedIn == true
-        { //TODO crossENCOnly and localENCOnly implementations
-            dbg!("reloading swap: ".to_string() +  &swap);
-            let mut pipe = Popen::create(&[
-                "python3",  "-u", "main.py", "watchSwapLoop", &swap,
-                &localChainAccountPassword, &crossChainAccountPassword,
-            ], PopenConfig{
-                detached: true,
-//                stdout: Redirection::Pipe,
-                ..Default::default()
-            }).expect("err");
-            let (out, err) = pipe.communicate(None).expect("err");
-            if let Some(exit_status) = pipe.poll()
-            {
-                println!("Out: {:?}, Err: {:?}", out, err)
-            }
-            else
-            {
-                pipe.terminate().expect("err");
+                let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("watchSwapLoop")
+                    .arg(&swap)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
             }
         }
     }

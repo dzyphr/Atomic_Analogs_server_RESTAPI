@@ -5,6 +5,7 @@ use futures::{Future, future};
 use warp::Filter;
 use warp::http::Response;
 use warp::hyper::header::HeaderValue;
+use std::time::{Duration, Instant};
 use warp::hyper;
 use warp::reply;
 use warp::filters::cors::cors;
@@ -44,6 +45,8 @@ mod str_tools;
 use str_tools::{rem_first_and_last};
 mod swap_tools;
 use swap_tools::{set_swap_state, update_local_swap_state_map, load_local_swap_state_map, check_swap_state_map_against_swap_dirs, restore_state};
+use std::os::unix::process::CommandExt;
+use nix::libc;
 fn insert_into_nested_map(
     outer_map: &mut SingleNestMap,
     outer_key: &str,
@@ -372,11 +375,9 @@ async fn main() {
         add_requests.or(get_requests).or(update_request).or(private_delete_request)
         .or(public_ordertypes_get_request).or(public_add_requests)
         .or(get_ElGamalPubs).or(get_ElGamalQGChannels).or(get_QGPubkeyArray).or(get_starterAPIKeys);
-    tokio::spawn(async move{
     warp::serve(routes)
-        .run(([127, 0, 0, 1], 3030))
-        .await;
-    }).await.unwrap();
+        .run(([127, 0, 0, 1], 3030)).await;
+    
 }
 
 
@@ -421,7 +422,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             let output = &(output.to_owned() + "MinVolCoinA variable is required!");
             return (status, Some(output.to_string()));
         }
-        else
+        else 
         {
             status = true;
             let NewOrderType = json!({
@@ -500,7 +501,8 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             swapDataMap.insert("SwapRole".to_string(), "Initiator".to_string());
             swapDataMap.insert("OrderTypeUUID".to_string(), request.OrderTypeUUID.clone().unwrap().replace("\\", "").replace("\"", ""));
             swapDataMap.insert("QGChannel".to_string(), request.QGChannel.clone().unwrap().replace("\\", "").replace("\"", ""));
-            swapDataMap.insert("ClientElGamalKey".to_string(), request.ElGamalKey.clone().unwrap().replace("\\", "").replace("\"", ""));
+            let clientElGamalKey = request.ElGamalKey.clone().unwrap_or_default().replace("\\", "").replace("\"", "");
+            swapDataMap.insert("ClientElGamalKey".to_string(), remove_quotes(&clientElGamalKey));
 
 
             let QGPubkeyArrayFilepath = "QGPubkeyArray.json";
@@ -540,7 +542,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             //MAJOR TODO TODO:!!!!make sure to save chosen pubkey and channel into swap folder!!!TODO TODO
             swapDataMap.insert("ElGamalKey".to_string(), CompatPubkey.clone().replace("\\", "").replace("\"", ""));
             let ElGamalKeyPath = "Key".to_owned() + &ElGKeyIndex + ".ElGamalKey"; 
-            swapDataMap.insert("ElGamalKeyPath".to_string(), ElGamalKeyPath.clone());
+            swapDataMap.insert("ElGamalKeyPath".to_string(), remove_quotes(&ElGamalKeyPath.clone()));
 
 
             let filepath = "OrderTypes.json";
@@ -921,275 +923,152 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                     }
                 }
             }
-            return task::spawn_blocking( move || {
             let CoinA_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinA_price"].clone();
             let CoinB_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinB_price"].clone(); 
             if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
-                let mut pipe = Popen::create(&[
-                    "python3",  "-u", "main.py", 
-                    "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
-                    &CoinA_Price.to_string(), &CoinB_Price.to_string()
-                ], PopenConfig{
-                    detached: true,
-                    stdout: Redirection::Pipe,
-                    ..Default::default()
-                }).expect("err");
-                
-                let (out, err) = pipe.communicate(None).expect("err");
-                if let Some(exit_status) = pipe.poll()
-                {
-                    println!("Out: {:?}, Err: {:?}", out, err)
-                }
-                else
-                {
-                    pipe.terminate().expect("err");
-                }
+                dbg!("spawning GeneralizedENC_FinalizationSubroutine");
+                let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_FinalizationSubroutine")
+                    .arg(&initiatorJSONPath)
+                    .arg(&CoinA_Price.to_string())
+                    .arg(&CoinB_Price.to_string())
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                dbg!("spawned GeneralizedENC_FinalizationSubroutine !");
+                let mut child2 = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
+                    .arg(&initiatorJSONPath.clone())
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn();
             }
-            if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
+            else if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
             {
-                let mut pipe = Popen::create(&[
-                    "python3",  "-u", "main.py",
-                    "GeneralizedENC_FinalizationSubroutine_crossENCOnly", &initiatorJSONPath,
-                    &CoinA_Price.to_string(), &CoinB_Price.to_string(),
-                    &crossChainAccountPassword
-                ], PopenConfig{
-                    detached: true,
-                    stdout: Redirection::Pipe,
-                    ..Default::default()
-                }).expect("err");
-                let (out, err) = pipe.communicate(None).expect("err");
-                if let Some(exit_status) = pipe.poll()
-                {
-                    println!("Out: {:?}, Err: {:?}", out, err)
-                }
-                else
-                {
-                    pipe.terminate().expect("err");
-                }
+                dbg!("running GeneralizedENC_FinalizationSubroutine");
+                let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_FinalizationSubroutine_crossENCOnly")
+                    .arg(&initiatorJSONPath)
+                    .arg(&CoinA_Price.to_string())
+                    .arg(&CoinB_Price.to_string())
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                let mut child2 = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_InitiatorClaimSubroutine_crossENCOnly")
+                    .arg(&initiatorJSONPath.clone())
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn();
             }
-            if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
+            else if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
             {
-                let mut pipe = Popen::create(&[
-                    "python3",  "-u", "main.py",
-                    "GeneralizedENC_FinalizationSubroutine_localENCOnly", &initiatorJSONPath,
-                    &CoinA_Price.to_string(), &CoinB_Price.to_string(),
-                    &localChainAccountPassword
-                ], PopenConfig{
-                    detached: true,
-                    stdout: Redirection::Pipe,
-                    ..Default::default()
-                }).expect("err");
-                let (out, err) = pipe.communicate(None).expect("err");
-                if let Some(exit_status) = pipe.poll()
-                {
-                    println!("Out: {:?}, Err: {:?}", out, err)
-                }
-                else
-                {
-                    pipe.terminate().expect("err");
-                }
+                dbg!("running GeneralizedENC_FinalizationSubroutine");
+                let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_FinalizationSubroutine_localENCOnly")
+                    .arg(&initiatorJSONPath)
+                    .arg(&CoinA_Price.to_string())
+                    .arg(&CoinB_Price.to_string())
+                    .arg(&localChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                let mut child2 = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_InitiatorClaimSubroutine_localENCOnly")
+                    .arg(&initiatorJSONPath.clone())
+                    .arg(&localChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn();
             }
             else
             {
-                let mut pipe = Popen::create(&[
-                    "python3",  "-u", "main.py",
-                    "GeneralizedENC_FinalizationSubroutine", &initiatorJSONPath,
-                    &CoinA_Price.to_string(), &CoinB_Price.to_string(), 
-                    &localChainAccountPassword, &crossChainAccountPassword
-                ], PopenConfig{
-                    detached: true,
-                    stdout: Redirection::Pipe,
-                    ..Default::default()
-                }).expect("err");
-                let (out, err) = pipe.communicate(None).expect("err");
-                if let Some(exit_status) = pipe.poll()
-                {
-                    println!("Out: {:?}, Err: {:?}", out, err)
-                }
-                else
-                {
-                    pipe.terminate().expect("err");
-                }
+                dbg!("spawning GeneralizedENC_FinalizationSubroutine");
+                let mut child = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_FinalizationSubroutine")
+                    .arg(&initiatorJSONPath)
+                    .arg(&CoinA_Price.to_string())
+                    .arg(&CoinB_Price.to_string())
+                    .arg(&localChainAccountPassword)
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn().unwrap();
+                dbg!("spawned GeneralizedENC_FinalizationSubroutine !");
+                let mut child2 = Command::new("python3")
+                    .arg("-u")
+                    .arg("main.py")
+                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
+                    .arg(&initiatorJSONPath.clone())
+                    .arg(&localChainAccountPassword)
+                    .arg(&crossChainAccountPassword)
+                    .before_exec(|| {
+                        // Create a new process group for the child process
+                        unsafe {
+                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                        }
+                        Ok(())
+                    }).spawn();
+                dbg!("running GeneralizedENC_FinalizationSubroutine");
             }
-            let child_thread = thread::spawn(move|| {
-                if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
-                {
-                    let mut child_process =
-                        Command::new("python3")
-                        .arg("-u")
-                        .arg("main.py")
-                        .arg("GeneralizedENC_InitiatorClaimSubroutine")
-                        .arg(initiatorJSONPath.clone())
-                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                        .spawn()
-                        .expect("Failed to start subprocess");
-
-                    let mut output = String::new();
-                    let mut error_output = String::new();
-
-                    if let Some(ref mut stdout) = child_process.stdout
-                    {
-                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stdout.");
-                    }
-
-                    if let Some(ref mut stderr) = child_process.stderr
-                    {
-                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stderr.");
-                    }
-                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                    if exit_status.success() {
-                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
-                    } else {
-                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                        eprintln!("Subprocess error output:\n{}", error_output);
-                    }
-                }
-                else if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
-                {
-                    let mut child_process =
-                        Command::new("python3")
-                        .arg("-u")
-                        .arg("main.py")
-                        .arg("GeneralizedENC_InitiatorClaimSubroutine_crossENCOnly")
-                        .arg(initiatorJSONPath.clone())
-                        .arg(crossChainAccountPassword.clone())
-                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                        .spawn()
-                        .expect("Failed to start subprocess");
-
-                    let mut output = String::new();
-                    let mut error_output = String::new();
-
-                    if let Some(ref mut stdout) = child_process.stdout
-                    {
-                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stdout.");
-                    }
-
-                    if let Some(ref mut stderr) = child_process.stderr
-                    {
-                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stderr.");
-                    }
-                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                    if exit_status.success() {
-                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
-                    } else {
-                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                        eprintln!("Subprocess error output:\n{}", error_output);
-                    }
-                }
-                else if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
-                {
-                    let mut child_process =
-                        Command::new("python3")
-                        .arg("-u")
-                        .arg("main.py")
-                        .arg("GeneralizedENC_InitiatorClaimSubroutine_localENCOnly")
-                        .arg(initiatorJSONPath)
-                        .arg(localChainAccountPassword)
-                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                        .spawn()
-                        .expect("Failed to start subprocess");
-
-                    let mut output = String::new();
-                    let mut error_output = String::new();
-
-                    if let Some(ref mut stdout) = child_process.stdout
-                    {
-                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stdout.");
-                    }
-
-                    if let Some(ref mut stderr) = child_process.stderr
-                    {
-                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stderr.");
-                    }
-                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                    if exit_status.success() {
-                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
-                    } else {
-                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                        eprintln!("Subprocess error output:\n{}", error_output);
-                    }
-                }
-                else
-                {
-                    let initiatorJSONPath = rem_first_and_last(&SwapMap["initiatorJSONPath"].to_string()).to_string();
-                    let mut child_process =
-                        Command::new("python3")
-                        .arg("-u")
-                        .arg("main.py")
-                        .arg("GeneralizedENC_InitiatorClaimSubroutine")
-                        .arg(initiatorJSONPath)
-                        .arg(localChainAccountPassword)
-                        .arg(crossChainAccountPassword)
-                        .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                        .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                        .spawn()
-                        .expect("Failed to start subprocess");
-
-                    let mut output = String::new();
-                    let mut error_output = String::new();
-
-                    if let Some(ref mut stdout) = child_process.stdout
-                    {
-                        stdout.read_to_string(&mut output).expect("Failed to read stdout");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stdout.");
-                    }
-
-                    if let Some(ref mut stderr) = child_process.stderr
-                    {
-                        stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-                    }
-                    else
-                    {
-                        eprintln!("Failed to capture stderr.");
-                    }
-                    let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-                    if exit_status.success() {
-                        println!("GeneralizedENC_InitiatorClaimSubroutine output:\n{}", output);
-                    } else {
-                        eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                        eprintln!("Subprocess error output:\n{}", error_output);
-                    }
-                }
-            });
-                let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
-                let mut buffer = String::new(); // filecontents
-                let mut file = fs::File::open(filepath.clone()).unwrap();
-                file.read_to_string(&mut buffer).unwrap();
-                set_swap_state(&request.SwapTicketID.clone().unwrap(), "finalized_submitted");
-                return (status, Some(buffer.to_string()))
-            }).await.unwrap()
+            let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
+            if !file_exists(&filepath) {
+                println!("File does not exist yet, waiting...");
+                wait_for_file(&filepath);
+                println!("File found!");
+            } else {
+                println!("File already exists!");
+            }
+            let mut buffer = String::new(); // filecontents
+            let mut file = fs::File::open(filepath.clone()).unwrap();
+            file.read_to_string(&mut buffer).unwrap();
+            set_swap_state(&request.SwapTicketID.clone().unwrap(), "finalized_submitted");
+            return (status, Some(buffer.to_string()))
         }
     }
     if request.request_type == "logInToPasswordEncryptedAccount"
@@ -1250,6 +1129,33 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
     {
         return  (status, Some("Unknown Error".to_string()));
     }
+}
+
+fn file_exists(path: &str) -> bool {
+    fs::metadata(path).is_ok()
+}
+
+fn wait_for_file(path: &str) {
+    let poll_interval = Duration::from_secs(1); // Adjust as needed
+    let timeout_duration = Duration::from_secs(30); // Adjust as needed
+    let start_time = Instant::now();
+/*
+    while start_time.elapsed() < timeout_duration {
+        if file_exists(path) {
+            return;
+        }
+        std::thread::sleep(poll_interval);
+    }
+*/
+    while !file_exists(path)
+    { std::thread::sleep(poll_interval); continue; }
+    return
+    // Timeout reached
+//    println!("Timeout: File not found after {:?}", timeout_duration);
+}
+
+fn remove_quotes(s: &str) -> String {
+    s.trim_matches(|c| c == '\"' || c == '\'').to_string()
 }
 
 #[derive(Debug)]

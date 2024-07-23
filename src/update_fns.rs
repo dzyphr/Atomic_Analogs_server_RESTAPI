@@ -7,7 +7,6 @@ pub async fn private_update_request_map(
     apikey: Html<&str>
     ) -> Result<impl warp::Reply, warp::Rejection> 
 {
-    tokio::spawn(async move{
     if storage.request_map.read().contains_key(&request.id) == false //prevent overwriting request ids
     {
         if private_accepted_request_types().contains(&request.request_type.as_str())
@@ -48,7 +47,6 @@ pub async fn private_update_request_map(
     {
         return Err(warp::reject::custom(Duplicateid))
     }
-    }).await.unwrap()
 }
 
 pub async fn public_update_request_map(
@@ -56,7 +54,6 @@ pub async fn public_update_request_map(
     storage: Storage,
     apikey: Html<&str>
     ) -> Result<impl warp::Reply, warp::Rejection> {
-    tokio::spawn(async move{
         if public_accepted_request_types().contains(&request.request_type.as_str())
         {
             let (handled, output) = handle_request(request.clone(), storage.clone()).await;
@@ -90,6 +87,5 @@ pub async fn public_update_request_map(
         {
             Err(warp::reject::custom(Badrequesttype))
         }
-    }).await.unwrap()
 }
 
