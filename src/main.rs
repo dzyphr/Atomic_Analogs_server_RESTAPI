@@ -1,11 +1,15 @@
+use pyo3::types::PyDict;
+use pyo3::types::PyList;
 use std::path::Path;
 use tokio::{task};
+use tokio::task::spawn_blocking;
 use tokio::io::AsyncReadExt;
 use futures::{Future, future};
 use warp::Filter;
 use warp::http::Response;
 use warp::hyper::header::HeaderValue;
 use std::time::{Duration, Instant};
+use tokio::time::sleep;
 use warp::hyper;
 use warp::reply;
 use warp::filters::cors::cors;
@@ -47,6 +51,8 @@ mod swap_tools;
 use swap_tools::{set_swap_state, update_local_swap_state_map, load_local_swap_state_map, check_swap_state_map_against_swap_dirs, restore_state};
 use std::os::unix::process::CommandExt;
 use nix::libc;
+use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 fn insert_into_nested_map(
     outer_map: &mut SingleNestMap,
     outer_key: &str,
@@ -186,7 +192,7 @@ fn accountNameFromChainAndIndex(chain: &str, index: usize) -> String {
 
 fn market_pricing_loop()
 {
-    let child_thread = thread::spawn(move|| {
+    /*let child_thread = thread::spawn(move|| {
             let mut child_process =
                 Command::new("python3")
                 .arg("-u")
@@ -233,6 +239,16 @@ fn market_pricing_loop()
                 eprintln!("Subprocess failed with exit code: {:?}", exit_status);
                 eprintln!("Subprocess error output:\n{}", error_output);
             }
+    });*/
+    tokio::spawn(async move {
+        Python::with_gil(|py| {
+            let code = std::fs::read_to_string("market_pricing.py").unwrap();
+            pyo3::prepare_freethreaded_python();
+            let activators = PyModule::from_code_bound(py, &code, "market_pricing", "market_pricing").unwrap();
+            activators.getattr("marketPricingLoop").unwrap()
+            .call0(
+            ).unwrap();
+        });
     });
 }
 
@@ -927,135 +943,218 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             let CoinB_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinB_price"].clone(); 
             if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
-                dbg!("spawning GeneralizedENC_FinalizationSubroutine");
-                let mut child = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_FinalizationSubroutine")
-                    .arg(&initiatorJSONPath)
-                    .arg(&CoinA_Price.to_string())
-                    .arg(&CoinB_Price.to_string())
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                Python::with_gil(|py| {
+                    let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                    pyo3::prepare_freethreaded_python();
+                    let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                    let args = PyTuple::new_bound(py, &[
+                        &initiatorJSONPath,
+                        &CoinA_Price.to_string(),
+                        &CoinB_Price.to_string()
+                    ]);
+                    match activators.getattr("watchSwapLoop").unwrap().call1( &args) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn().unwrap();
-                dbg!("spawned GeneralizedENC_FinalizationSubroutine !");
-                let mut child2 = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
-                    .arg(&initiatorJSONPath.clone())
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                });
+                tokio::spawn(async move {
+                    Python::with_gil(|py| {
+                        let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                        pyo3::prepare_freethreaded_python();
+                        let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                        let args = PyTuple::new_bound(py, &[
+                            &initiatorJSONPath,
+                        ]);
+                        match activators.getattr("watchSwapLoop").unwrap().call1( &args) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn();
+
+                    });
+                });
             }
             else if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
             {
-                dbg!("running GeneralizedENC_FinalizationSubroutine");
-                let mut child = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_FinalizationSubroutine_crossENCOnly")
-                    .arg(&initiatorJSONPath)
-                    .arg(&CoinA_Price.to_string())
-                    .arg(&CoinB_Price.to_string())
-                    .arg(&crossChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                Python::with_gil(|py| {
+                    let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                    pyo3::prepare_freethreaded_python();
+                    let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                    let args = PyTuple::new_bound(py, &[
+                        &initiatorJSONPath,
+                        &CoinA_Price.to_string(),
+                        &CoinB_Price.to_string()
+                    ]);
+                    let kwargs = PyDict::new_bound(py);
+                    kwargs.set_item("crosschainpassword", &crossChainAccountPassword).unwrap();
+                    match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn().unwrap();
-                let mut child2 = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_InitiatorClaimSubroutine_crossENCOnly")
-                    .arg(&initiatorJSONPath.clone())
-                    .arg(&crossChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                });
+                tokio::spawn(async move {
+                    Python::with_gil(|py| {
+                        let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                        pyo3::prepare_freethreaded_python();
+                        let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                        let args = PyTuple::new_bound(py, &[
+                            &initiatorJSONPath,
+                        ]);
+                        let kwargs = PyDict::new_bound(py);
+                        kwargs.set_item("crosschainpassword", &crossChainAccountPassword).unwrap();
+                        match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn();
+                    });
+                });
             }
             else if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
             {
-                dbg!("running GeneralizedENC_FinalizationSubroutine");
-                let mut child = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_FinalizationSubroutine_localENCOnly")
-                    .arg(&initiatorJSONPath)
-                    .arg(&CoinA_Price.to_string())
-                    .arg(&CoinB_Price.to_string())
-                    .arg(&localChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                Python::with_gil(|py| {
+                    let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                    pyo3::prepare_freethreaded_python();
+                    let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                    let args = PyTuple::new_bound(py, &[
+                        &initiatorJSONPath,
+                        &CoinA_Price.to_string(),
+                        &CoinB_Price.to_string()
+                    ]);
+                    let kwargs = PyDict::new_bound(py);
+                    kwargs.set_item("localchainpassword", &localChainAccountPassword).unwrap();
+                    match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn().unwrap();
-                let mut child2 = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_InitiatorClaimSubroutine_localENCOnly")
-                    .arg(&initiatorJSONPath.clone())
-                    .arg(&localChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
+                });
+                tokio::spawn(async move {
+                    Python::with_gil(|py| {
+                        let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                        pyo3::prepare_freethreaded_python();
+                        let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                        let args = PyTuple::new_bound(py, &[
+                            &initiatorJSONPath,
+                        ]);
+                        let kwargs = PyDict::new_bound(py);
+                        kwargs.set_item("localchainpassword", &localChainAccountPassword).unwrap();
+                        match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
+                                dbg!(out, traceback);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
                         }
-                        Ok(())
-                    }).spawn();
+                    });
+                });
             }
             else
             {
-                dbg!("spawning GeneralizedENC_FinalizationSubroutine");
-                let mut child = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_FinalizationSubroutine")
-                    .arg(&initiatorJSONPath)
-                    .arg(&CoinA_Price.to_string())
-                    .arg(&CoinB_Price.to_string())
-                    .arg(&localChainAccountPassword)
-                    .arg(&crossChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
-                        }
-                        Ok(())
-                    }).spawn().unwrap();
-                dbg!("spawned GeneralizedENC_FinalizationSubroutine !");
-                let mut child2 = Command::new("python3")
-                    .arg("-u")
-                    .arg("main.py")
-                    .arg("GeneralizedENC_InitiatorClaimSubroutine")
-                    .arg(&initiatorJSONPath.clone())
-                    .arg(&localChainAccountPassword)
-                    .arg(&crossChainAccountPassword)
-                    .before_exec(|| {
-                        // Create a new process group for the child process
-                        unsafe {
-                            libc::setpgid(0, 0); // setpgid(0, 0) sets the process group ID to the process ID of the calling process
-                        }
-                        Ok(())
-                    }).spawn();
-                dbg!("running GeneralizedENC_FinalizationSubroutine");
+                Python::with_gil(|py| {
+                    let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                    pyo3::prepare_freethreaded_python();
+                    let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                    let args = PyTuple::new_bound(py, &[
+                        &initiatorJSONPath,
+                        &CoinA_Price.to_string(),
+                        &CoinB_Price.to_string()
+                    ]);
+                    let kwargs = PyDict::new_bound(py);
+                    kwargs.set_item(
+                        "crosschainpassword", &crossChainAccountPassword
+                    ).unwrap();
+                    kwargs.set_item(
+                        "localchainpassword", &localChainAccountPassword
+                    ).unwrap();
+                    activators.getattr("GeneralizedENC_FinalizationSubroutine").unwrap()
+                        .call(
+                            &args, Some(&kwargs)
+                        ).unwrap();
+                });
+                tokio::spawn(async move {
+                    Python::with_gil(|py| {
+                        let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
+                        pyo3::prepare_freethreaded_python();
+                        let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
+                        let args = PyTuple::new_bound(py, &[
+                            &initiatorJSONPath,
+                        ]);
+                        let kwargs = PyDict::new_bound(py);
+                        kwargs.set_item(
+                            "crosschainpassword", &crossChainAccountPassword
+                        ).unwrap();
+                        kwargs.set_item(
+                            "localchainpassword", &localChainAccountPassword
+                        ).unwrap();
+                        activators.getattr("GeneralizedENC_InitiatorClaimSubroutine").unwrap()
+                            .call(
+                                &args, Some(&kwargs)
+                            ).unwrap();
+                    });
+                });
             }
+
             let filepath = request.SwapTicketID.clone().unwrap() + "/ENC_finalization.bin";
             if !file_exists(&filepath) {
                 println!("File does not exist yet, waiting...");
