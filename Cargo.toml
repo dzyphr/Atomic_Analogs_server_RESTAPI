@@ -18,4 +18,4 @@ warp-cors = "0.3.0"
 regex = "1.10.5"
 futures = "0.3.30"
 nix = "0.29.0"
-pyo3 = { version = "0.22.2", features = ["auto-initialize"]  }
+pyo3 = { version = "0.22.2"  }

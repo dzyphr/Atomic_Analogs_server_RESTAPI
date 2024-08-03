@@ -192,55 +192,8 @@ fn accountNameFromChainAndIndex(chain: &str, index: usize) -> String {
 
 fn market_pricing_loop()
 {
-    /*let child_thread = thread::spawn(move|| {
-            let mut child_process =
-                Command::new("python3")
-                .arg("-u")
-                .arg("main.py")
-                .arg("marketPricingLoop")
-                .stdout(Stdio::piped()) // Redirect stdout to /dev/null or NUL to detach from parent
-                .stderr(Stdio::piped()) // Redirect stderr to /dev/null or NUL to detach from parent
-                .spawn()
-                .expect("Failed to start subprocess");
-
-            let mut output = String::new();
-            let mut error_output = String::new();
-
-            if let Some(ref mut stdout) = child_process.stdout
-            {
-                stdout.read_to_string(&mut output).expect("Failed to read stdout");
-            }
-            else
-            {
-                eprintln!("Failed to capture stdout.");
-            }
-
-            if let Some(ref mut stderr) = child_process.stderr
-            {
-                stderr.read_to_string(&mut error_output).expect("Failed to read stderr");
-            }
-            else
-            {
-                eprintln!("Failed to capture stderr.");
-            }
-/*
-            let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-            if !exit_status.success() {
-                eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-            }
-            eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-            eprintln!("Subprocess error output:\n{}", error_output);
-
-            */
-            let exit_status = child_process.wait().expect("Failed to wait for subprocess");
-            if exit_status.success() {
-                println!("Subprocess output:\n{}", output);
-            } else {
-                eprintln!("Subprocess failed with exit code: {:?}", exit_status);
-                eprintln!("Subprocess error output:\n{}", error_output);
-            }
-    });*/
     tokio::spawn(async move {
+        pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let code = std::fs::read_to_string("market_pricing.py").unwrap();
             pyo3::prepare_freethreaded_python();
@@ -943,6 +896,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             let CoinB_Price = serde_json::from_str::<HashMap<String, Value>>(&OrderTypes).expect("Failed to parse JSON")[&OrderTypeUUID]["CoinB_price"].clone(); 
             if localChainAccountPassword == String::new() && crossChainAccountPassword == String::new()
             {
+                pyo3::prepare_freethreaded_python();
                 Python::with_gil(|py| {
                     let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                     pyo3::prepare_freethreaded_python();
@@ -952,11 +906,12 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         &CoinA_Price.to_string(),
                         &CoinB_Price.to_string()
                     ]);
-                    match activators.getattr("watchSwapLoop").unwrap().call1( &args) {
+                    match activators.getattr("GeneralizedENC_FinalizationSubroutine").unwrap().call1( &args) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+                                //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
@@ -969,6 +924,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         }
                 });
                 tokio::spawn(async move {
+                    pyo3::prepare_freethreaded_python();
                     Python::with_gil(|py| {
                         let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                         pyo3::prepare_freethreaded_python();
@@ -976,19 +932,20 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         let args = PyTuple::new_bound(py, &[
                             &initiatorJSONPath,
                         ]);
-                        match activators.getattr("watchSwapLoop").unwrap().call1( &args) {
+                        match activators.getattr("GeneralizedENC_InitiatorClaimSubroutine").unwrap().call1( &args) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+/*                                //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");*/
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
                                 let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
                                 let traceback_obj = traceback_module.getattr("format_exception").unwrap();
                                 let exc_tb = err.traceback_bound(py);
-                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
-
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err.to_string());
+                                
                             }
                         }
 
@@ -997,6 +954,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             }
             else if localChainAccountPassword == String::new() && crossChainAccountPassword != String::new()
             {
+                pyo3::prepare_freethreaded_python();
                 Python::with_gil(|py| {
                     let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                     pyo3::prepare_freethreaded_python();
@@ -1008,11 +966,12 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                     ]);
                     let kwargs = PyDict::new_bound(py);
                     kwargs.set_item("crosschainpassword", &crossChainAccountPassword).unwrap();
-                    match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                    match activators.getattr("GeneralizedENC_FinalizationSubroutine_crossENCOnly").unwrap().call( &args, Some(&kwargs)) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+                                //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
@@ -1025,6 +984,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         }
                 });
                 tokio::spawn(async move {
+                    pyo3::prepare_freethreaded_python();
                     Python::with_gil(|py| {
                         let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                         pyo3::prepare_freethreaded_python();
@@ -1034,11 +994,12 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         ]);
                         let kwargs = PyDict::new_bound(py);
                         kwargs.set_item("crosschainpassword", &crossChainAccountPassword).unwrap();
-                        match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                        match activators.getattr("GeneralizedENC_InitiatorClaimSubroutine_crossENCOnly").unwrap().call( &args, Some(&kwargs)) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+                                 //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
@@ -1054,6 +1015,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             }
             else if localChainAccountPassword != String::new() && crossChainAccountPassword == String::new()
             {
+                pyo3::prepare_freethreaded_python();
                 Python::with_gil(|py| {
                     let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                     pyo3::prepare_freethreaded_python();
@@ -1065,11 +1027,12 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                     ]);
                     let kwargs = PyDict::new_bound(py);
                     kwargs.set_item("localchainpassword", &localChainAccountPassword).unwrap();
-                    match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                    match activators.getattr("GeneralizedENC_FinalizationSubroutine_localENCOnly").unwrap().call( &args, Some(&kwargs)) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+                                 //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
@@ -1082,6 +1045,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         }
                 });
                 tokio::spawn(async move {
+                    pyo3::prepare_freethreaded_python();
                     Python::with_gil(|py| {
                         let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                         pyo3::prepare_freethreaded_python();
@@ -1091,11 +1055,13 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         ]);
                         let kwargs = PyDict::new_bound(py);
                         kwargs.set_item("localchainpassword", &localChainAccountPassword).unwrap();
-                        match activators.getattr("watchSwapLoop").unwrap().call( &args, Some(&kwargs)) {
+                        match activators.getattr("GeneralizedENC_InitiatorClaimSubroutine_localENCOnly").unwrap()
+                            .call( &args, Some(&kwargs)) {
                             Ok(out) => {
                                 // Handle the successful output
-                                let traceback: std::collections::HashMap<String, String> = out.extract().unwrap();
-                                dbg!(out, traceback);
+                                 //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
                             }
                             Err(err) => {
                                 // Handle the exception and print the traceback
@@ -1111,9 +1077,9 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
             }
             else
             {
+                pyo3::prepare_freethreaded_python();
                 Python::with_gil(|py| {
                     let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
-                    pyo3::prepare_freethreaded_python();
                     let activators = PyModule::from_code_bound(py, &code, "initiatorInterface.py", "initatorInterface").unwrap();
                     let args = PyTuple::new_bound(py, &[
                         &initiatorJSONPath,
@@ -1127,12 +1093,25 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                     kwargs.set_item(
                         "localchainpassword", &localChainAccountPassword
                     ).unwrap();
-                    activators.getattr("GeneralizedENC_FinalizationSubroutine").unwrap()
-                        .call(
-                            &args, Some(&kwargs)
-                        ).unwrap();
+                    match activators.getattr("GeneralizedENC_FinalizationSubroutine").unwrap().call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
+                        }
                 });
                 tokio::spawn(async move {
+                    pyo3::prepare_freethreaded_python();
                     Python::with_gil(|py| {
                         let code = std::fs::read_to_string("initiatorInterface.py").unwrap();
                         pyo3::prepare_freethreaded_python();
@@ -1147,10 +1126,23 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
                         kwargs.set_item(
                             "localchainpassword", &localChainAccountPassword
                         ).unwrap();
-                        activators.getattr("GeneralizedENC_InitiatorClaimSubroutine").unwrap()
-                            .call(
-                                &args, Some(&kwargs)
-                            ).unwrap();
+                        match activators.getattr("GeneralizedENC_InitiatorClaimSubroutine").unwrap()
+                            .call( &args, Some(&kwargs)) {
+                            Ok(out) => {
+                                // Handle the successful output
+                                 //let extract: String
+                                    //= out.extract().expect("error getting traceback to string");
+                                dbg!(out,); //extract);
+                            }
+                            Err(err) => {
+                                // Handle the exception and print the traceback
+                                let traceback_module = PyModule::import_bound(py, "traceback").unwrap();
+                                let traceback_obj = traceback_module.getattr("format_exception").unwrap();
+                                let exc_tb = err.traceback_bound(py);
+                                println!("{}{}", exc_tb.unwrap().format().unwrap(), err);
+
+                            }
+                        }
                     });
                 });
             }
