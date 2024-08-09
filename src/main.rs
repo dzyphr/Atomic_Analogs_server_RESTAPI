@@ -352,6 +352,7 @@ async fn main() {
 
 async fn handle_request(request: Request, storage: Storage) -> (bool, Option<String>)
 {
+    return tokio::spawn(async move { 
     let mut output = "";
     let mut status = false;
     if request.request_type == "publishNewOrderType"
@@ -1220,6 +1221,7 @@ async fn handle_request(request: Request, storage: Storage) -> (bool, Option<Str
     {
         return  (status, Some("Unknown Error".to_string()));
     }
+    }).await.unwrap()
 }
 
 fn file_exists(path: &str) -> bool {
@@ -1230,19 +1232,9 @@ fn wait_for_file(path: &str) {
     let poll_interval = Duration::from_secs(1); // Adjust as needed
     let timeout_duration = Duration::from_secs(30); // Adjust as needed
     let start_time = Instant::now();
-/*
-    while start_time.elapsed() < timeout_duration {
-        if file_exists(path) {
-            return;
-        }
-        std::thread::sleep(poll_interval);
-    }
-*/
     while !file_exists(path)
     { std::thread::sleep(poll_interval); continue; }
     return
-    // Timeout reached
-//    println!("Timeout: File not found after {:?}", timeout_duration);
 }
 
 fn remove_quotes(s: &str) -> String {
